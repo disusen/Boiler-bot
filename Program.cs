@@ -52,9 +52,10 @@ class Program
                 services.AddScoped<TaskService>();
                 services.AddScoped<HabitService>();
                 services.AddSingleton<ReminderService>();
+				services.AddSingleton<OllamaService>();
 
-                // Hosted service that runs the bot
-                services.AddHostedService<BotHostedService>();
+				// Hosted service that runs the bot
+				services.AddHostedService<BotHostedService>();
             })
             .ConfigureLogging(logging =>
             {
