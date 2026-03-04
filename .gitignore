@@ -1,0 +1,18 @@
+# Config with secrets
+config/appsettings.local.json
+
+# Build output
+bin/
+obj/
+
+# Database (contains your personal data)
+data/
+
+# VS/Rider
+.vs/
+.idea/
+*.user
+
+# OS
+Thumbs.db
+desktop.ini
