@@ -56,6 +56,8 @@ public class GeneralCommands : ModuleBase<SocketCommandContext>
                 "`!remind list` — pending reminders\n" +
                 "`!remind cancel <id>` — cancel a reminder\n" +
                 "Time formats: `30m`, `2h`, `1d`, `2025-03-10 15:00`")
+            .AddField("🤖 AI Assistant",
+            "`!ask <question>` — ask Boiler anything")
             .WithFooter("!task add Buy groceries | !habit add Morning workout | !remind me 1h Take a break")
             .Build();
 
