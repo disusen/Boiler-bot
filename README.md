@@ -4,10 +4,10 @@ A personal Discord productivity bot built with Discord.NET and C#, named after a
 
 ## Features
 
-- 📋 **Task Management** — add tasks, set due dates, priorities, mark done
-- 🌿 **Habit Tracking** — daily/weekly habits with streak tracking
-- ⏰ **Reminders** — one-shot reminders with flexible time input (`30m`, `2h`, `1d`, or datetime)
-- 🤖 **Local AI Assistant** — ask anything via a locally running Phi-4 LLM through Ollama, no API keys or cloud required
+- 📋 **Task Management** - add tasks, set due dates, priorities, mark done
+- 🌿 **Habit Tracking** - daily/weekly habits with streak tracking
+- ⏰ **Reminders** - one-shot reminders with flexible time input (`30m`, `2h`, `1d`, or datetime)
+- 🤖 **Local AI Assistant** - ask anything via a locally running Phi-4 LLM through Ollama, no API keys or cloud required
 
 ## Setup
 
