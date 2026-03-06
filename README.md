@@ -7,7 +7,7 @@ A personal Discord productivity bot built with Discord.NET and C#, named after a
 - 📋 **Task Management** - add tasks, set due dates, priorities, mark done
 - 🌿 **Habit Tracking** - daily/weekly habits with streak tracking
 - ⏰ **Reminders** - one-shot reminders with flexible time input (`30m`, `2h`, `1d`, or datetime)
-- 🤖 **Local AI Assistant** - ask anything via a locally running Phi-4 LLM through Ollama, no API keys or cloud required
+- 🤖 **Local AI Assistant** - ask anything via a locally running LLM through Ollama, no API keys or cloud required
 
 ## Setup
 
@@ -17,17 +17,23 @@ A personal Discord productivity bot built with Discord.NET and C#, named after a
 - A Discord bot token from the [Developer Portal](https://discord.com/developers/applications)
 - [Ollama](https://ollama.com) for the `!ask` command
 
-### 1. Install Ollama and pull Phi-4
+### 1. Install Ollama and pull a model
 
-Download and install Ollama from [ollama.com](https://ollama.com), then open a terminal and run:
+Download and install Ollama from [ollama.com](https://ollama.com), then pull whichever model you want to use. For example:
 
 ```powershell
 ollama pull phi4
 ```
 
-This downloads the Phi-4 14B model (~9GB). Once pulled, Ollama runs in the background automatically and exposes a local API at `http://localhost:11434`. No further configuration needed.
+Or a lighter alternative if you're constrained on VRAM:
 
-> **Note:** Phi-4 requires a GPU with at least 12GB VRAM for comfortable performance. On lesser hardware you can swap it for a smaller model like `llama3.2:3b` by changing `Ollama:Model` in `appsettings.json`.
+```powershell
+ollama pull llama3.2:3b
+```
+
+Once pulled, Ollama runs in the background automatically and exposes a local API at `http://localhost:11434`. On startup, the bot will DM you a list of all installed models and ask you to pick one. You can also select `0` to disable `!ask` for that session.
+
+> **Note:** Phi-4 14B (~9GB) requires a GPU with at least 12GB VRAM for comfortable performance. Smaller models like `llama3.2:3b` run on modest hardware with minimal quality tradeoff for simple queries.
 
 ### 2. Configure the bot
 
@@ -37,17 +43,19 @@ Edit `config/appsettings.json`:
 {
   "Discord": {
     "Token": "YOUR_BOT_TOKEN_HERE",
-    "Prefix": "!"
+    "Prefix": "!",
+    "OwnerId": "YOUR_DISCORD_USER_ID_HERE"
   },
   "Database": {
     "Path": "data/productivity.db"
   },
   "Ollama": {
-    "BaseUrl": "http://localhost:11434",
-    "Model": "phi4"
+    "BaseUrl": "http://localhost:11434"
   }
 }
 ```
+
+To get your Discord user ID: go to **Settings → Advanced**, enable **Developer Mode**, then right-click your username anywhere and select **Copy User ID**.
 
 To avoid storing the token in a file, create `config/appsettings.local.json` (gitignored) with just:
 
@@ -112,7 +120,7 @@ dotnet run --project ProductivityBot.csproj
 | `!remind list` | List pending reminders |
 | `!remind cancel 2` | Cancel reminder #2 |
 | **AI Assistant** | |
-| `!ask <question>` | Ask Phi-4 anything — runs fully locally |
+| `!ask <question>` | Ask your selected Ollama model anything — runs fully locally |
 
 ## Project Structure
 
@@ -130,7 +138,7 @@ Boiler-bot/
 │   │   ├── ReminderCommands.cs   # !remind *
 │   │   └── AskCommands.cs        # !ask *
 │   ├── Services/
-│   │   ├── BotHostedService.cs        # Bot startup/shutdown
+│   │   ├── BotHostedService.cs        # Bot startup/shutdown + model selection
 │   │   ├── CommandHandlerService.cs   # Routes messages to commands
 │   │   ├── TaskService.cs             # Task business logic
 │   │   ├── HabitService.cs            # Habit + streak logic
