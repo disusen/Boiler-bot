@@ -65,11 +65,11 @@ class Program
             })
             .Build();
 
-        // Ensure DB is created
+        // Apply any pending EF Core migrations on startup
         using (var scope = host.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<BotDbContext>();
-            await db.Database.EnsureCreatedAsync();
+            await db.Database.MigrateAsync();
         }
 
         await host.RunAsync();

@@ -7,7 +7,7 @@ A personal Discord productivity bot built with Discord.NET and C#, named after a
 - 📋 **Task Management** - add tasks, set due dates, priorities, mark done
 - 🌿 **Habit Tracking** - daily/weekly habits with streak tracking
 - ⏰ **Reminders** - one-shot reminders with flexible time input (`30m`, `2h`, `1d`, or datetime)
-- 🤖 **Local AI Assistant** - ask anything via a locally running LLM through Ollama, with per-channel conversation memory — no API keys or cloud required
+- 🤖 **Local AI Assistant** - ask anything via a locally running LLM through Ollama, with per-channel conversation memory - no API keys or cloud required
 - 🌙 **End-of-Day Summary** - AI-generated daily recap of tasks and habits delivered to your DMs at 9pm, or on demand with `!eod`
 
 ## Setup
@@ -60,7 +60,7 @@ Edit `config/appsettings.json`:
 }
 ```
 
-**`Ollama:ContextMessages`** — how many messages Boiler remembers per conversation (default: `20`). Each exchange (your message + Boiler's reply) counts as 2. With Phi-4's 16k context window, 20 is well within safe limits.
+**`Ollama:ContextMessages`** - how many messages Boiler remembers per conversation (default: `20`). Each exchange (your message + Boiler's reply) counts as 2. With Phi-4's 16k context window, 20 is well within safe limits.
 
 **`Bot:Timezone`** — controls when the automatic 9pm EOD summary fires. Use IANA timezone IDs on Linux/macOS (e.g. `Europe/Vilnius`, `America/New_York`) or Windows timezone names on Windows (e.g. `Eastern Standard Time`). Defaults to `UTC` if not set or unrecognised.
 
@@ -91,7 +91,16 @@ Under **OAuth2 → URL Generator**, select:
 - Scopes: `bot`
 - Bot Permissions: `Send Messages`, `Read Message History`, `View Channels`
 
-### 4. Run
+### 4. Install EF Core tools and create the initial migration
+
+```bash
+dotnet tool install --global dotnet-ef
+dotnet ef migrations add InitialCreate
+```
+
+This generates a `Migrations/` folder that tracks your schema. You only need to do this once on first setup. The bot applies pending migrations automatically on every startup via `MigrateAsync()`.
+
+### 5. Run
 
 ```bash
 dotnet run
@@ -143,8 +152,8 @@ dotnet run --project ProductivityBot.csproj
 
 Boiler remembers the last N messages (configurable via `Ollama:ContextMessages`) of each conversation, scoped per user per channel. This means:
 
-- Conversations in **different channels are fully isolated** — Boiler won't mix up context between your server and DMs
-- History is **in-memory only** — it resets when the bot restarts, keeping things simple and private
+- Conversations in **different channels are fully isolated** - Boiler won't mix up context between your server and DMs
+- History is **in-memory only** - it resets when the bot restarts, keeping things simple and private
 - The embed footer shows how many messages are currently in context
 - Use `!memory clear` to start a fresh conversation at any time without restarting the bot
 
@@ -158,19 +167,33 @@ At **9pm in your configured timezone**, Boiler will automatically DM you an AI-g
 - ✅ Habits logged and current streaks
 - ❌ Habits missed
 
-You can also call `!eod` at any time to trigger it early. Only one summary is sent per day — if you use `!eod`, the automatic 9pm trigger is skipped. The daily flag resets at midnight in your configured timezone.
+You can also call `!eod` at any time to trigger it early. Only one summary is sent per day - if you use `!eod`, the automatic 9pm trigger is skipped. The daily flag resets at midnight in your configured timezone.
 
 EOD requires Ollama to be active. If no model was selected at startup, `!eod` is disabled for that session.
 
-### Upgrading an existing database
+## Database & Migrations
 
-If you're updating from a version before EOD was added, the `EodLogs` table won't exist in your database. Create it manually with:
+Schema changes are managed with EF Core migrations. The bot calls `MigrateAsync()` on startup, so any pending migrations are applied automatically - you never need to touch the database manually.
+
+### Adding a schema change
+
+After modifying a model in `Models.cs` or `BotDbContext.cs`:
 
 ```bash
-sqlite3 data/productivity.db "CREATE TABLE IF NOT EXISTS 'EodLogs' ('Id' INTEGER NOT NULL CONSTRAINT 'PK_EodLogs' PRIMARY KEY AUTOINCREMENT, 'Date' TEXT NOT NULL, 'FiredByCommand' INTEGER NOT NULL, 'FiredAt' TEXT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS 'IX_EodLogs_Date' ON 'EodLogs' ('Date');"
+dotnet ef migrations add YourMigrationName
 ```
 
-Then restart the bot. Going forward, schema migrations will be handled properly via EF Core migrations.
+The next time the bot starts, the migration is applied automatically.
+
+### Upgrading an existing database (pre-migrations)
+
+If you were running the bot before migrations were introduced, your database has the correct schema but no `__EFMigrationsHistory` table. Mark the baseline migration as already applied without re-running it:
+
+```bash
+dotnet ef database update InitialCreate --connection "Data Source=data/productivity.db"
+```
+
+Then start the bot normally. Future migrations will apply as usual.
 
 ## Project Structure
 
@@ -199,6 +222,7 @@ Boiler-bot/
 │   └── Models.cs                 # EF Core entity models
 ├── Data/
 │   └── BotDbContext.cs           # SQLite database context
+├── Migrations/                   # EF Core migration files (auto-generated)
 └── ProductivityBot.csproj
 ```
 
@@ -209,4 +233,3 @@ Boiler-bot/
 - [ ] Morning briefing DM at a configured time
 - [ ] Notes/journal module
 - [ ] Per-server vs per-user data separation
-- [ ] EF Core migrations for schema changes
