@@ -57,7 +57,9 @@ public class GeneralCommands : ModuleBase<SocketCommandContext>
                 "`!remind cancel <id>` — cancel a reminder\n" +
                 "Time formats: `30m`, `2h`, `1d`, `2025-03-10 15:00`")
             .AddField("🤖 AI Assistant",
-                "`!ask <question>` — ask Boiler anything")
+                "`!ask <question>` — ask Boiler anything (remembers conversation per channel)\n" +
+                "`!memory clear` — wipe Boiler's memory for this channel\n" +
+                "`!memory status` — see how many messages Boiler remembers")
             .AddField("🌙 End of Day",
                 "`!eod` — trigger your daily summary early _(owner only)_\n" +
                 "Boiler automatically sends a summary at **9pm** in the configured timezone.")

@@ -7,7 +7,7 @@ A personal Discord productivity bot built with Discord.NET and C#, named after a
 - 📋 **Task Management** - add tasks, set due dates, priorities, mark done
 - 🌿 **Habit Tracking** - daily/weekly habits with streak tracking
 - ⏰ **Reminders** - one-shot reminders with flexible time input (`30m`, `2h`, `1d`, or datetime)
-- 🤖 **Local AI Assistant** - ask anything via a locally running LLM through Ollama, no API keys or cloud required
+- 🤖 **Local AI Assistant** - ask anything via a locally running LLM through Ollama, with per-channel conversation memory — no API keys or cloud required
 - 🌙 **End-of-Day Summary** - AI-generated daily recap of tasks and habits delivered to your DMs at 9pm, or on demand with `!eod`
 
 ## Setup
@@ -51,7 +51,8 @@ Edit `config/appsettings.json`:
     "Path": "data/productivity.db"
   },
   "Ollama": {
-    "BaseUrl": "http://localhost:11434"
+    "BaseUrl": "http://localhost:11434",
+    "ContextMessages": 20
   },
   "Bot": {
     "Timezone": "Europe/London"
@@ -59,7 +60,9 @@ Edit `config/appsettings.json`:
 }
 ```
 
-**Timezone** controls when the automatic 9pm EOD summary fires. Use IANA timezone IDs on Linux/macOS (e.g. `Europe/Vilnius`, `America/New_York`) or Windows timezone names on Windows (e.g. `Eastern Standard Time`). Defaults to `UTC` if not set or unrecognised.
+**`Ollama:ContextMessages`** — how many messages Boiler remembers per conversation (default: `20`). Each exchange (your message + Boiler's reply) counts as 2. With Phi-4's 16k context window, 20 is well within safe limits.
+
+**`Bot:Timezone`** — controls when the automatic 9pm EOD summary fires. Use IANA timezone IDs on Linux/macOS (e.g. `Europe/Vilnius`, `America/New_York`) or Windows timezone names on Windows (e.g. `Eastern Standard Time`). Defaults to `UTC` if not set or unrecognised.
 
 To get your Discord user ID: go to **Settings → Advanced**, enable **Developer Mode**, then right-click your username anywhere and select **Copy User ID**.
 
@@ -106,6 +109,7 @@ dotnet run --project ProductivityBot.csproj
 | Command | Description |
 |---|---|
 | `!help` | Show all commands |
+| `!ping` | Check bot latency |
 | **Tasks** | |
 | `!task add Buy milk` | Add a task |
 | `!task add Fix bug --priority high --due 2025-03-15` | Add task with priority and due date |
@@ -115,20 +119,34 @@ dotnet run --project ProductivityBot.csproj
 | `!task stats` | Show your task statistics |
 | **Habits** | |
 | `!habit add Morning workout` | Create a daily habit |
+| `!habit add Read --freq weekly` | Create a weekly habit |
 | `!habit list` | List habits with streak info |
 | `!habit log 1` | Log habit #1 as done today |
+| `!habit log 1 felt great` | Log with a note |
 | `!habit today` | See unlogged habits for today |
 | `!habit archive 1` | Archive a habit |
 | **Reminders** | |
 | `!remind me 30m Take a break` | Reminder in 30 minutes |
 | `!remind me 2h Check oven` | Reminder in 2 hours |
 | `!remind me 1d Stand up meeting` | Reminder in 1 day |
+| `!remind me 2025-03-10 15:00 Call doctor` | Reminder at a specific date and time |
 | `!remind list` | List pending reminders |
 | `!remind cancel 2` | Cancel reminder #2 |
 | **AI Assistant** | |
-| `!ask <question>` | Ask your selected Ollama model anything — runs fully locally |
+| `!ask <question>` | Ask Boiler anything — remembers the conversation per channel |
+| `!memory clear` | Wipe Boiler's memory for the current channel |
+| `!memory status` | See how many messages Boiler currently remembers |
 | **End of Day** | |
 | `!eod` | Trigger your end-of-day summary early _(owner only)_ |
+
+## AI Conversation Memory
+
+Boiler remembers the last N messages (configurable via `Ollama:ContextMessages`) of each conversation, scoped per user per channel. This means:
+
+- Conversations in **different channels are fully isolated** — Boiler won't mix up context between your server and DMs
+- History is **in-memory only** — it resets when the bot restarts, keeping things simple and private
+- The embed footer shows how many messages are currently in context
+- Use `!memory clear` to start a fresh conversation at any time without restarting the bot
 
 ## End-of-Day Summary
 
@@ -140,7 +158,7 @@ At **9pm in your configured timezone**, Boiler will automatically DM you an AI-g
 - ✅ Habits logged and current streaks
 - ❌ Habits missed
 
-You can also call `!eod` at any time before 9pm to trigger it early. Only one summary is sent per day — if you use `!eod`, the automatic 9pm trigger is skipped. The daily flag resets at midnight in your configured timezone.
+You can also call `!eod` at any time to trigger it early. Only one summary is sent per day — if you use `!eod`, the automatic 9pm trigger is skipped. The daily flag resets at midnight in your configured timezone.
 
 EOD requires Ollama to be active. If no model was selected at startup, `!eod` is disabled for that session.
 
@@ -161,36 +179,34 @@ Boiler-bot/
 ├── config/
 │   ├── appsettings.json          # Bot config (committed, no secrets)
 │   └── appsettings.local.json    # Your real token (gitignored)
-├── src/
-│   ├── Program.cs                # Entry point, DI setup
-│   ├── Commands/
-│   │   ├── GeneralCommands.cs    # !help, !ping
-│   │   ├── TaskCommands.cs       # !task *
-│   │   ├── HabitCommands.cs      # !habit *
-│   │   ├── ReminderCommands.cs   # !remind *
-│   │   ├── AskCommands.cs        # !ask
-│   │   └── EodCommands.cs        # !eod
-│   ├── Services/
-│   │   ├── BotHostedService.cs        # Bot startup/shutdown + model selection
-│   │   ├── CommandHandlerService.cs   # Routes messages to commands
-│   │   ├── TaskService.cs             # Task business logic
-│   │   ├── HabitService.cs            # Habit + streak logic
-│   │   ├── ReminderService.cs         # Background reminder timer
-│   │   ├── OllamaService.cs           # Ollama HTTP client
-│   │   └── EodService.cs              # End-of-day summary logic + timer
-│   ├── Models/
-│   │   └── Models.cs             # EF Core entity models
-│   └── Data/
-│       └── BotDbContext.cs       # SQLite database context
+├── Commands/
+│   ├── GeneralCommands.cs        # !help, !ping
+│   ├── TaskCommands.cs           # !task *
+│   ├── HabitCommands.cs          # !habit *
+│   ├── ReminderCommands.cs       # !remind *
+│   ├── AskCommands.cs            # !ask
+│   ├── MemoryCommands.cs         # !memory *
+│   └── EodCommands.cs            # !eod
+├── Services/
+│   ├── BotHostedService.cs       # Bot startup/shutdown + model selection
+│   ├── CommandHandlerService.cs  # Routes messages to commands
+│   ├── TaskService.cs            # Task business logic
+│   ├── HabitService.cs           # Habit + streak logic
+│   ├── ReminderService.cs        # Background reminder timer
+│   ├── OllamaService.cs          # Ollama HTTP client + conversation history
+│   └── EodService.cs             # End-of-day summary logic + timer
+├── Models/
+│   └── Models.cs                 # EF Core entity models
+├── Data/
+│   └── BotDbContext.cs           # SQLite database context
 └── ProductivityBot.csproj
 ```
 
 ## Next Steps / Ideas
 
 - [ ] Slash commands (Discord's modern `/command` style)
-- [ ] Pomodoro timer (`!pomodoro start`)
 - [ ] `!task edit <id>` command
+- [ ] Morning briefing DM at a configured time
 - [ ] Notes/journal module
-- [ ] Conversation memory for `!ask` (multi-turn context)
 - [ ] Per-server vs per-user data separation
 - [ ] EF Core migrations for schema changes
