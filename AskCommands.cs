@@ -15,12 +15,21 @@ public class AskCommands : ModuleBase<SocketCommandContext>
 	[Summary("Ask Boiler a question. Usage: !ask <question>")]
 	public async Task AskAsync([Remainder] string prompt)
 	{
+		if (!_ollama.IsEnabled)
+		{
+			await ReplyAsync(
+				"🚫 The AI assistant is currently disabled.\n" +
+				"No Ollama model was selected at startup. The bot owner can restart to configure one.");
+			return;
+		}
+
 		// Show typing indicator while waiting for response
 		await Context.Channel.TriggerTypingAsync();
 
 		var thinking = await ReplyAsync("🐾 Boiler is thinking...");
 
 		var response = await _ollama.AskAsync(prompt);
+		var modelLabel = _ollama.CurrentModel ?? "unknown";
 
 		// Discord messages max out at 2000 chars — split if needed
 		if (response.Length <= 1900)
@@ -29,7 +38,7 @@ public class AskCommands : ModuleBase<SocketCommandContext>
 				.WithColor(new Color(0x5865F2))
 				.WithAuthor("Boiler", iconUrl: Context.Client.CurrentUser.GetAvatarUrl())
 				.WithDescription(response)
-				.WithFooter($"Asked by {Context.User.Username} • phi4")
+				.WithFooter($"Asked by {Context.User.Username} • {modelLabel}")
 				.Build();
 
 			await thinking.DeleteAsync();
@@ -46,7 +55,7 @@ public class AskCommands : ModuleBase<SocketCommandContext>
 					.WithColor(new Color(0x5865F2))
 					.WithAuthor(i == 0 ? "Boiler" : "Boiler (continued)", iconUrl: Context.Client.CurrentUser.GetAvatarUrl())
 					.WithDescription(chunks[i])
-					.WithFooter(i == chunks.Count - 1 ? $"Asked by {Context.User.Username} • phi4" : $"Part {i + 1}/{chunks.Count}")
+					.WithFooter(i == chunks.Count - 1 ? $"Asked by {Context.User.Username} • {modelLabel}" : $"Part {i + 1}/{chunks.Count}")
 					.Build();
 
 				await ReplyAsync(embed: embed);

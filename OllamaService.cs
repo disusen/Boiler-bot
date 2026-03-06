@@ -7,53 +7,123 @@ namespace ProductivityBot.Services;
 
 public class OllamaService
 {
-	private readonly HttpClient _http;
-	private readonly string _model;
-	private readonly ILogger<OllamaService> _logger;
+    private readonly HttpClient _http;
+    private readonly ILogger<OllamaService> _logger;
 
-	public OllamaService(IConfiguration config, ILogger<OllamaService> logger)
-	{
-		_logger = logger;
-		_model = config["Ollama:Model"] ?? "phi4";
-		var baseUrl = config["Ollama:BaseUrl"] ?? "http://localhost:11434";
+    private string? _model;
 
-		_http = new HttpClient
-		{
-			BaseAddress = new Uri(baseUrl),
-			Timeout = TimeSpan.FromSeconds(120)
-		};
-	}
+    /// <summary>
+    /// True once a model has been selected and Ollama is reachable.
+    /// AskCommands should check this before processing requests.
+    /// </summary>
+    public bool IsEnabled => _model is not null;
 
-	public async Task<string> AskAsync(string prompt, string? systemPrompt = null)
-	{
-		var requestBody = new
-		{
-			model = _model,
-			prompt = prompt,
-			system = systemPrompt ?? "You are Boiler, a Discord bot. You were named after a beagle called Boiler. If anyone asks who or what you are, you are Boiler — not Phi-4, not an AI model, just Boiler. Keep responses concise and well-formatted for Discord. Avoid overly long responses.",
-			stream = false
-		};
+    /// <summary>
+    /// The currently active model name, or null if disabled.
+    /// </summary>
+    public string? CurrentModel => _model;
 
-		try
-		{
-			var response = await _http.PostAsJsonAsync("/api/generate", requestBody);
-			response.EnsureSuccessStatusCode();
+    public OllamaService(IConfiguration config, ILogger<OllamaService> logger)
+    {
+        _logger = logger;
+        var baseUrl = config["Ollama:BaseUrl"] ?? "http://localhost:11434";
 
-			var json = await response.Content.ReadAsStringAsync();
-			var doc = JsonDocument.Parse(json);
+        _http = new HttpClient
+        {
+            BaseAddress = new Uri(baseUrl),
+            Timeout = TimeSpan.FromSeconds(120)
+        };
+    }
 
-			return doc.RootElement.GetProperty("response").GetString()
-				?? "No response received.";
-		}
-		catch (TaskCanceledException)
-		{
-			_logger.LogWarning("Ollama request timed out");
-			return "⏱️ Request timed out — the model took too long to respond.";
-		}
-		catch (HttpRequestException ex)
-		{
-			_logger.LogError(ex, "Failed to reach Ollama");
-			return "❌ Couldn't reach Ollama. Is it running?";
-		}
-	}
+    /// <summary>
+    /// Queries Ollama for all locally installed models.
+    /// Returns an empty list if Ollama is unreachable.
+    /// </summary>
+    public async Task<List<string>> GetInstalledModelsAsync()
+    {
+        try
+        {
+            var response = await _http.GetAsync("/api/tags");
+            response.EnsureSuccessStatusCode();
+
+            var json = await response.Content.ReadAsStringAsync();
+            var doc = JsonDocument.Parse(json);
+
+            var models = new List<string>();
+
+            if (doc.RootElement.TryGetProperty("models", out var modelsArray))
+            {
+                foreach (var model in modelsArray.EnumerateArray())
+                {
+                    if (model.TryGetProperty("name", out var nameProp))
+                    {
+                        var name = nameProp.GetString();
+                        if (name is not null)
+                            models.Add(name);
+                    }
+                }
+            }
+
+            return models;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch installed Ollama models");
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Sets the active model. Call this after the owner selects one at startup.
+    /// </summary>
+    public void SetModel(string modelName)
+    {
+        _model = modelName;
+        _logger.LogInformation("Ollama model set to: {Model}", modelName);
+    }
+
+    /// <summary>
+    /// Disables the AI feature entirely (no model selected or Ollama unavailable).
+    /// </summary>
+    public void Disable()
+    {
+        _model = null;
+        _logger.LogWarning("OllamaService disabled — !ask will be unavailable.");
+    }
+
+    public async Task<string> AskAsync(string prompt, string? systemPrompt = null)
+    {
+        if (_model is null)
+            return "❌ AI assistant is not configured. The bot owner needs to restart and select a model.";
+
+        var requestBody = new
+        {
+            model = _model,
+            prompt = prompt,
+            system = systemPrompt ?? "You are Boiler, a Discord bot. You were named after a beagle called Boiler. If anyone asks who or what you are, you are Boiler — not an AI model, just Boiler. Keep responses concise and well-formatted for Discord. Avoid overly long responses.",
+            stream = false
+        };
+
+        try
+        {
+            var response = await _http.PostAsJsonAsync("/api/generate", requestBody);
+            response.EnsureSuccessStatusCode();
+
+            var json = await response.Content.ReadAsStringAsync();
+            var doc = JsonDocument.Parse(json);
+
+            return doc.RootElement.GetProperty("response").GetString()
+                ?? "No response received.";
+        }
+        catch (TaskCanceledException)
+        {
+            _logger.LogWarning("Ollama request timed out");
+            return "⏱️ Request timed out — the model took too long to respond.";
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "Failed to reach Ollama");
+            return "❌ Couldn't reach Ollama. Is it running?";
+        }
+    }
 }
