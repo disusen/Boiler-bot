@@ -11,6 +11,7 @@ public class BotDbContext : DbContext
     public DbSet<Habit> Habits => Set<Habit>();
     public DbSet<HabitLog> HabitLogs => Set<HabitLog>();
     public DbSet<Reminder> Reminders => Set<Reminder>();
+    public DbSet<EodLog> EodLogs => Set<EodLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -42,6 +43,13 @@ public class BotDbContext : DbContext
         {
             e.HasKey(r => r.Id);
             e.HasIndex(r => new { r.UserId, r.IsFired });
+        });
+
+        modelBuilder.Entity<EodLog>(e =>
+        {
+            e.HasKey(el => el.Id);
+            // One EOD per calendar date — enforced in service logic
+            e.HasIndex(el => el.Date).IsUnique();
         });
     }
 }

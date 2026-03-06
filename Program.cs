@@ -18,11 +18,11 @@ class Program
         var host = Host.CreateDefaultBuilder(args)
             .ConfigureAppConfiguration(config =>
             {
-				config.SetBasePath(AppContext.BaseDirectory);
-				config.AddJsonFile("config/appsettings.json", optional: false, reloadOnChange: true);
-				config.AddJsonFile("config/appsettings.local.json", optional: true, reloadOnChange: true); // add this
-				config.AddEnvironmentVariables(prefix: "BOT_");
-			})
+                config.SetBasePath(AppContext.BaseDirectory);
+                config.AddJsonFile("config/appsettings.json", optional: false, reloadOnChange: true);
+                config.AddJsonFile("config/appsettings.local.json", optional: true, reloadOnChange: true);
+                config.AddEnvironmentVariables(prefix: "BOT_");
+            })
             .ConfigureServices((context, services) =>
             {
                 // Discord client
@@ -52,10 +52,11 @@ class Program
                 services.AddScoped<TaskService>();
                 services.AddScoped<HabitService>();
                 services.AddSingleton<ReminderService>();
-				services.AddSingleton<OllamaService>();
+                services.AddSingleton<OllamaService>();
+                services.AddSingleton<EodService>();
 
-				// Hosted service that runs the bot
-				services.AddHostedService<BotHostedService>();
+                // Hosted service that runs the bot
+                services.AddHostedService<BotHostedService>();
             })
             .ConfigureLogging(logging =>
             {

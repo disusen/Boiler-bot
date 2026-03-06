@@ -12,6 +12,7 @@ public class BotHostedService : IHostedService
     private readonly DiscordSocketClient _client;
     private readonly CommandHandlerService _commandHandler;
     private readonly ReminderService _reminderService;
+    private readonly EodService _eodService;
     private readonly OllamaService _ollama;
     private readonly IConfiguration _config;
     private readonly ILogger<BotHostedService> _logger;
@@ -20,6 +21,7 @@ public class BotHostedService : IHostedService
         DiscordSocketClient client,
         CommandHandlerService commandHandler,
         ReminderService reminderService,
+        EodService eodService,
         OllamaService ollama,
         IConfiguration config,
         ILogger<BotHostedService> logger)
@@ -27,6 +29,7 @@ public class BotHostedService : IHostedService
         _client = client;
         _commandHandler = commandHandler;
         _reminderService = reminderService;
+        _eodService = eodService;
         _ollama = ollama;
         _config = config;
         _logger = logger;
@@ -49,6 +52,7 @@ public class BotHostedService : IHostedService
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         _reminderService.Stop();
+        _eodService.Stop();
         await _client.StopAsync();
         await _client.LogoutAsync();
     }
@@ -71,8 +75,10 @@ public class BotHostedService : IHostedService
         var ownerIdStr = _config["Discord:OwnerId"];
         if (!ulong.TryParse(ownerIdStr, out var ownerId))
         {
-            _logger.LogWarning("Discord:OwnerId not configured — skipping model selection. !ask will be disabled.");
+            _logger.LogWarning("Discord:OwnerId not configured — skipping model selection. !ask and !eod will be disabled.");
             _ollama.Disable();
+            // Still start EOD service so it can report its disabled state cleanly
+            _eodService.Start(_client);
             return;
         }
 
@@ -85,13 +91,15 @@ public class BotHostedService : IHostedService
         {
             _logger.LogError(ex, "Could not fetch owner user for model selection DM");
             _ollama.Disable();
+            _eodService.Start(_client);
             return;
         }
 
         if (owner is null)
         {
-            _logger.LogWarning("Owner user {Id} not found — !ask will be disabled.", ownerId);
+            _logger.LogWarning("Owner user {Id} not found — !ask and !eod will be disabled.", ownerId);
             _ollama.Disable();
+            _eodService.Start(_client);
             return;
         }
 
@@ -106,7 +114,8 @@ public class BotHostedService : IHostedService
             await dmChannel.SendMessageAsync(
                 "⚠️ **Boiler startup notice**\n" +
                 "Couldn't reach Ollama or no models are installed.\n" +
-                "`!ask` is **disabled** for this session. Install a model via `ollama pull <model>` and restart.");
+                "`!ask` and `!eod` are **disabled** for this session. Install a model via `ollama pull <model>` and restart.");
+            _eodService.Start(_client);
             return;
         }
 
@@ -114,13 +123,13 @@ public class BotHostedService : IHostedService
         var lines = new List<string>
         {
             "🐾 **Boiler is starting up!**",
-            "The following Ollama models are installed. Reply with a number to select one, or `0` to disable `!ask`:\n"
+            "The following Ollama models are installed. Reply with a number to select one, or `0` to disable `!ask` and `!eod`:\n"
         };
 
         for (int i = 0; i < models.Count; i++)
             lines.Add($"`{i + 1}.` {models[i]}");
 
-        lines.Add("`0.` Disable !ask for this session");
+        lines.Add("`0.` Disable !ask and !eod for this session");
         lines.Add("\n_You have 60 seconds to reply._");
 
         await dmChannel.SendMessageAsync(string.Join("\n", lines));
@@ -130,28 +139,31 @@ public class BotHostedService : IHostedService
 
         if (chosen is null)
         {
-            // Timeout or invalid input — disable
             _ollama.Disable();
             await dmChannel.SendMessageAsync(
-                "⏱️ No valid selection received. `!ask` is **disabled** for this session.\nRestart the bot to try again.");
+                "⏱️ No valid selection received. `!ask` and `!eod` are **disabled** for this session.\nRestart the bot to try again.");
+            _eodService.Start(_client);
             return;
         }
 
         if (chosen == "disabled")
         {
             _ollama.Disable();
-            await dmChannel.SendMessageAsync("🚫 `!ask` has been **disabled** for this session.");
+            await dmChannel.SendMessageAsync("🚫 `!ask` and `!eod` have been **disabled** for this session.");
+            _eodService.Start(_client);
             return;
         }
 
         _ollama.SetModel(chosen);
-        await dmChannel.SendMessageAsync($"✅ Model set to **{chosen}**. `!ask` is ready to go!");
+        await dmChannel.SendMessageAsync($"✅ Model set to **{chosen}**. `!ask` and `!eod` are ready to go!");
+
+        // Start EOD after model is confirmed active
+        _eodService.Start(_client);
     }
 
     /// <summary>
     /// Listens on the DM channel for a valid numbered reply from the owner.
     /// Returns the selected model name, "disabled" for 0, or null on timeout.
-    /// Out-of-range numbers are ignored, keeping the prompt open.
     /// </summary>
     private async Task<string?> WaitForOwnerReplyAsync(
         IDMChannel dmChannel,
@@ -172,9 +184,7 @@ public class BotHostedService : IHostedService
                     tcs.TrySetResult("disabled");
                 else if (choice >= 1 && choice <= models.Count)
                     tcs.TrySetResult(models[choice - 1]);
-                else
-                    // Out of range — ask again by not resolving yet
-                    return Task.CompletedTask;
+                // Out of range — ignore, keep waiting
             }
 
             return Task.CompletedTask;
@@ -186,7 +196,6 @@ public class BotHostedService : IHostedService
         {
             var timeoutTask = Task.Delay(timeout);
             var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
-
             return completedTask == timeoutTask ? null : await tcs.Task;
         }
         finally

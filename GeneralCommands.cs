@@ -57,7 +57,10 @@ public class GeneralCommands : ModuleBase<SocketCommandContext>
                 "`!remind cancel <id>` — cancel a reminder\n" +
                 "Time formats: `30m`, `2h`, `1d`, `2025-03-10 15:00`")
             .AddField("🤖 AI Assistant",
-            "`!ask <question>` — ask Boiler anything")
+                "`!ask <question>` — ask Boiler anything")
+            .AddField("🌙 End of Day",
+                "`!eod` — trigger your daily summary early _(owner only)_\n" +
+                "Boiler automatically sends a summary at **9pm** in the configured timezone.")
             .WithFooter("!task add Buy groceries | !habit add Morning workout | !remind me 1h Take a break")
             .Build();
 

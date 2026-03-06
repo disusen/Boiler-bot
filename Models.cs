@@ -89,3 +89,20 @@ public class Reminder
     public bool IsFired { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
+
+public class EodLog
+{
+    public int Id { get; set; }
+
+    /// <summary>
+    /// The calendar date (in bot-local timezone) for which this EOD was fired.
+    /// </summary>
+    public DateOnly Date { get; set; }
+
+    /// <summary>
+    /// True if triggered by !eod command, false if fired automatically at 9pm.
+    /// </summary>
+    public bool FiredByCommand { get; set; }
+
+    public DateTime FiredAt { get; set; } = DateTime.UtcNow;
+}

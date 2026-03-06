@@ -1,4 +1,4 @@
-﻿using System.Net.Http.Json;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -14,7 +14,7 @@ public class OllamaService
 
     /// <summary>
     /// True once a model has been selected and Ollama is reachable.
-    /// AskCommands should check this before processing requests.
+    /// AskCommands and EodService should check this before processing requests.
     /// </summary>
     public bool IsEnabled => _model is not null;
 
@@ -88,9 +88,12 @@ public class OllamaService
     public void Disable()
     {
         _model = null;
-        _logger.LogWarning("OllamaService disabled — !ask will be unavailable.");
+        _logger.LogWarning("OllamaService disabled — !ask and !eod will be unavailable.");
     }
 
+    /// <summary>
+    /// General-purpose prompt for !ask.
+    /// </summary>
     public async Task<string> AskAsync(string prompt, string? systemPrompt = null)
     {
         if (_model is null)
@@ -104,6 +107,44 @@ public class OllamaService
             stream = false
         };
 
+        return await SendRequestAsync(requestBody);
+    }
+
+    /// <summary>
+    /// Generates a personalised end-of-day summary from structured daily data.
+    /// The data string should contain pre-formatted task and habit information.
+    /// </summary>
+    public async Task<string> GenerateEodSummaryAsync(string dailyData)
+    {
+        if (_model is null)
+            return "❌ AI assistant is not configured.";
+
+        var systemPrompt =
+            "You are Boiler, a personal productivity assistant Discord bot named after a beagle. " +
+            "Your job right now is to write a warm, encouraging end-of-day summary for the bot owner. " +
+            "You will be given structured data about what they accomplished today: tasks completed or still pending, " +
+            "and habits logged or missed. " +
+            "Write a short, friendly summary (4-8 sentences). Acknowledge wins, gently note what was missed, " +
+            "and end with a motivating remark for tomorrow. " +
+            "Format your response for Discord — use emoji sparingly but meaningfully. " +
+            "Do not repeat the raw data back verbatim. Synthesise it into natural language. " +
+            "Keep the tone warm and personal, like a loyal dog checking in on their owner.";
+
+        var requestBody = new
+        {
+            model = _model,
+            prompt = $"Here is today's productivity data:\n\n{dailyData}\n\nPlease write the end-of-day summary.",
+            system = systemPrompt,
+            stream = false
+        };
+
+        return await SendRequestAsync(requestBody);
+    }
+
+    // --- Internal ---
+
+    private async Task<string> SendRequestAsync(object requestBody)
+    {
         try
         {
             var response = await _http.PostAsJsonAsync("/api/generate", requestBody);
