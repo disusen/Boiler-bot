@@ -8,6 +8,7 @@ A personal Discord productivity bot built with Discord.NET and C#, named after a
 - 🌿 **Habit Tracking** - daily/weekly habits with streak tracking
 - ⏰ **Reminders** - one-shot reminders with flexible time input (`30m`, `2h`, `1d`, or datetime)
 - 🤖 **Local AI Assistant** - ask anything via a locally running LLM through Ollama, no API keys or cloud required
+- 🌙 **End-of-Day Summary** - AI-generated daily recap of tasks and habits delivered to your DMs at 9pm, or on demand with `!eod`
 
 ## Setup
 
@@ -15,7 +16,7 @@ A personal Discord productivity bot built with Discord.NET and C#, named after a
 
 - [.NET 8 SDK](https://dotnet.microsoft.com/download)
 - A Discord bot token from the [Developer Portal](https://discord.com/developers/applications)
-- [Ollama](https://ollama.com) for the `!ask` command
+- [Ollama](https://ollama.com) for the `!ask` and `!eod` commands
 
 ### 1. Install Ollama and pull a model
 
@@ -31,7 +32,7 @@ Or a lighter alternative if you're constrained on VRAM:
 ollama pull llama3.2:3b
 ```
 
-Once pulled, Ollama runs in the background automatically and exposes a local API at `http://localhost:11434`. On startup, the bot will DM you a list of all installed models and ask you to pick one. You can also select `0` to disable `!ask` for that session.
+Once pulled, Ollama runs in the background automatically and exposes a local API at `http://localhost:11434`. On startup, the bot will DM you a list of all installed models and ask you to pick one. You can also select `0` to disable `!ask` and `!eod` for that session.
 
 > **Note:** Phi-4 14B (~9GB) requires a GPU with at least 12GB VRAM for comfortable performance. Smaller models like `llama3.2:3b` run on modest hardware with minimal quality tradeoff for simple queries.
 
@@ -51,9 +52,14 @@ Edit `config/appsettings.json`:
   },
   "Ollama": {
     "BaseUrl": "http://localhost:11434"
+  },
+  "Bot": {
+    "Timezone": "Europe/London"
   }
 }
 ```
+
+**Timezone** controls when the automatic 9pm EOD summary fires. Use IANA timezone IDs on Linux/macOS (e.g. `Europe/Vilnius`, `America/New_York`) or Windows timezone names on Windows (e.g. `Eastern Standard Time`). Defaults to `UTC` if not set or unrecognised.
 
 To get your Discord user ID: go to **Settings → Advanced**, enable **Developer Mode**, then right-click your username anywhere and select **Copy User ID**.
 
@@ -121,6 +127,32 @@ dotnet run --project ProductivityBot.csproj
 | `!remind cancel 2` | Cancel reminder #2 |
 | **AI Assistant** | |
 | `!ask <question>` | Ask your selected Ollama model anything — runs fully locally |
+| **End of Day** | |
+| `!eod` | Trigger your end-of-day summary early _(owner only)_ |
+
+## End-of-Day Summary
+
+At **9pm in your configured timezone**, Boiler will automatically DM you an AI-generated summary of your day covering:
+
+- ✅ Tasks completed today
+- ➕ Tasks added today
+- ⬜ Tasks still pending (with overdue warnings)
+- ✅ Habits logged and current streaks
+- ❌ Habits missed
+
+You can also call `!eod` at any time before 9pm to trigger it early. Only one summary is sent per day — if you use `!eod`, the automatic 9pm trigger is skipped. The daily flag resets at midnight in your configured timezone.
+
+EOD requires Ollama to be active. If no model was selected at startup, `!eod` is disabled for that session.
+
+### Upgrading an existing database
+
+If you're updating from a version before EOD was added, the `EodLogs` table won't exist in your database. Create it manually with:
+
+```bash
+sqlite3 data/productivity.db "CREATE TABLE IF NOT EXISTS 'EodLogs' ('Id' INTEGER NOT NULL CONSTRAINT 'PK_EodLogs' PRIMARY KEY AUTOINCREMENT, 'Date' TEXT NOT NULL, 'FiredByCommand' INTEGER NOT NULL, 'FiredAt' TEXT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS 'IX_EodLogs_Date' ON 'EodLogs' ('Date');"
+```
+
+Then restart the bot. Going forward, schema migrations will be handled properly via EF Core migrations.
 
 ## Project Structure
 
@@ -136,14 +168,16 @@ Boiler-bot/
 │   │   ├── TaskCommands.cs       # !task *
 │   │   ├── HabitCommands.cs      # !habit *
 │   │   ├── ReminderCommands.cs   # !remind *
-│   │   └── AskCommands.cs        # !ask *
+│   │   ├── AskCommands.cs        # !ask
+│   │   └── EodCommands.cs        # !eod
 │   ├── Services/
 │   │   ├── BotHostedService.cs        # Bot startup/shutdown + model selection
 │   │   ├── CommandHandlerService.cs   # Routes messages to commands
 │   │   ├── TaskService.cs             # Task business logic
 │   │   ├── HabitService.cs            # Habit + streak logic
 │   │   ├── ReminderService.cs         # Background reminder timer
-│   │   └── OllamaService.cs           # Ollama HTTP client
+│   │   ├── OllamaService.cs           # Ollama HTTP client
+│   │   └── EodService.cs              # End-of-day summary logic + timer
 │   ├── Models/
 │   │   └── Models.cs             # EF Core entity models
 │   └── Data/
@@ -155,8 +189,8 @@ Boiler-bot/
 
 - [ ] Slash commands (Discord's modern `/command` style)
 - [ ] Pomodoro timer (`!pomodoro start`)
-- [ ] Weekly summary DM (cron-based)
 - [ ] `!task edit <id>` command
 - [ ] Notes/journal module
 - [ ] Conversation memory for `!ask` (multi-turn context)
 - [ ] Per-server vs per-user data separation
+- [ ] EF Core migrations for schema changes
