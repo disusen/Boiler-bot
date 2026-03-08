@@ -90,13 +90,20 @@ public class RamblingService
         {
             var idleFor = DateTime.UtcNow - _ollama.LastInteractionAt;
 
-            // Only roll if actually idle — interaction may have reset the clock since last tick
-            if (idleFor < _idleThreshold) return;
+            _logger.LogInformation("RamblingService: tick — idle for {Idle:mm\\:ss}, threshold {Threshold:mm\\:ss}", idleFor, _idleThreshold);
 
-            if (_random.NextDouble() < 0.33)
+            // Only roll if actually idle — interaction may have reset the clock since last tick
+            if (idleFor < _idleThreshold)
+            {
+                _logger.LogInformation("RamblingService: not idle enough yet, skipping.");
+                return;
+            }
+
+            var roll = _random.NextDouble();
+            _logger.LogInformation("RamblingService: rolled {Roll:F2} — {Result}", roll, roll < 0.33 ? "HIT" : "miss");
+
+            if (roll < 0.33)
                 await PostRambleAsync();
-            else
-                _logger.LogDebug("RamblingService: roll failed this window.");
         }
         catch (Exception ex)
         {
