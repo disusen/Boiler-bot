@@ -14,6 +14,7 @@ public class BotHostedService : IHostedService
     private readonly ReminderService _reminderService;
     private readonly EodService _eodService;
     private readonly OllamaService _ollama;
+    private readonly RamblingService _ramblingService;
     private readonly IConfiguration _config;
     private readonly ILogger<BotHostedService> _logger;
 
@@ -23,6 +24,7 @@ public class BotHostedService : IHostedService
         ReminderService reminderService,
         EodService eodService,
         OllamaService ollama,
+        RamblingService ramblingService,
         IConfiguration config,
         ILogger<BotHostedService> logger)
     {
@@ -31,6 +33,7 @@ public class BotHostedService : IHostedService
         _reminderService = reminderService;
         _eodService = eodService;
         _ollama = ollama;
+        _ramblingService = ramblingService;
         _config = config;
         _logger = logger;
     }
@@ -163,8 +166,10 @@ public class BotHostedService : IHostedService
             ? "🛠️ Tools enabled — `!ask` can manage tasks, habits, and reminders using natural language."
             : "⚠️ This model doesn't support tool calls — `!ask` will work conversationally only.\nTip: try `ollama pull qwen2.5:7b` or `llama3.1:8b` for tool use support.");
 
-        // Start EOD after model is confirmed active
+        // Start EOD and rambling after model is confirmed active
         _eodService.Start(_client);
+        _ollama.SetRamblingService(_ramblingService);
+        _ramblingService.Start(_client);
     }
 
     /// <summary>

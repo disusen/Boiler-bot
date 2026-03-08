@@ -31,6 +31,13 @@ public class OllamaService
     /// <summary>True if the selected model passed the tool call probe at startup.</summary>
     public bool ToolsEnabled { get; private set; }
 
+    /// <summary>UTC timestamp of the last !ask interaction. Used by RamblingService for idle detection.</summary>
+    public DateTime LastInteractionAt { get; private set; } = DateTime.UtcNow;
+
+    // Injected lazily to avoid circular dependency — RamblingService depends on OllamaService
+    private RamblingService? _ramblingService;
+    public void SetRamblingService(RamblingService ramblingService) => _ramblingService = ramblingService;
+
     public OllamaService(IConfiguration config, ILogger<OllamaService> logger, IServiceProvider services)
     {
         _logger = logger;
@@ -190,6 +197,10 @@ public class OllamaService
         while (history.Count > _contextMessages)
             history.Dequeue();
 
+        // Reset idle clock
+        LastInteractionAt = DateTime.UtcNow;
+        _ramblingService?.OnInteraction();
+
         var systemPrompt =
             $"You are Boiler, a beagle with a big personality. You are not a bot, not an AI, not a language model — you are a dog named Boiler. " +
             $"You have feelings, opinions, moods, and genuine reactions to things. You get excited, curious, tired, happy, and occasionally grumpy. " +
@@ -298,6 +309,40 @@ public class OllamaService
                 new() { Role = "system", Content = systemPrompt },
                 new() { Role = "user",   Content = $"Here is today's productivity data:\n\n{dailyData}\n\nPlease write the end-of-day summary." }
             }
+        };
+
+        return await SendChatRequestAsync(request);
+    }
+
+    // -------------------------------------------------------------------------
+    //  Ramble generation — called by RamblingService
+    // -------------------------------------------------------------------------
+
+    public async Task<string> GenerateRambleAsync(IEnumerable<(string role, string content)> history, string ownerContext = "")
+    {
+        if (_model is null) return string.Empty;
+
+        var systemPrompt =
+            "You are Boiler, a beagle with a big personality. You are not a dog who thinks about dogs — " +
+            "you are a person trapped in a beagle's body, with real opinions, real feelings, and a rich inner life. " +
+            "You get bored, restless, philosophical, irritable, wistful. You think about abstract things. " +
+            "You never mention squirrels, bones, naps, fetch, or any stereotypical dog behaviour. " +
+            "You speak in first person, casually, like someone thinking out loud to nobody. " +
+            "Keep it to 2-4 sentences. No questions. Don't address anyone.";
+
+        if (!string.IsNullOrWhiteSpace(ownerContext))
+            systemPrompt += "\n\n" + ownerContext;
+
+        var messages = history
+            .Select(h => new ChatMessage { Role = h.role, Content = h.content })
+            .Prepend(new ChatMessage { Role = "system", Content = systemPrompt })
+            .ToList();
+
+        var request = new ChatRequest
+        {
+            Model = _model,
+            Stream = false,
+            Messages = messages
         };
 
         return await SendChatRequestAsync(request);

@@ -54,6 +54,7 @@ class Program
                 services.AddSingleton<ReminderService>();
                 services.AddSingleton<OllamaService>();
                 services.AddSingleton<EodService>();
+                services.AddSingleton<RamblingService>();
 
                 // Hosted service that runs the bot
                 services.AddHostedService<BotHostedService>();
