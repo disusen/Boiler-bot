@@ -1,6 +1,7 @@
 using Discord;
 using Discord.WebSocket;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using ProductivityBot.Data;
 using ProductivityBot.Models;
@@ -107,10 +108,10 @@ public class ReminderService
     {
         using var scope = _services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<BotDbContext>();
-        return db.Reminders
+        return await db.Reminders
             .Where(r => r.UserId == userId && !r.IsFired && r.FireAt > DateTime.UtcNow)
             .OrderBy(r => r.FireAt)
-            .ToList();
+            .ToListAsync();
     }
 
     public async Task<bool> CancelReminderAsync(ulong userId, int reminderId)

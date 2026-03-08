@@ -3,6 +3,7 @@ using Discord.WebSocket;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.EntityFrameworkCore;
 using ProductivityBot.Data;
 using ProductivityBot.Models;
 
@@ -164,21 +165,21 @@ public class RamblingService
             var now = DateTime.UtcNow;
             var today = now.Date;
 
-            var pendingTasks = db.Tasks
+            var pendingTasks = await db.Tasks
                 .Where(t => t.UserId == _ownerId && !t.IsCompleted)
                 .OrderBy(t => t.Priority == TaskPriority.High ? 0 : t.Priority == TaskPriority.Normal ? 1 : 2)
                 .Take(5)
-                .ToList();
+                .ToListAsync();
 
-            var activeHabits = db.Habits
+            var activeHabits = await db.Habits
                 .Where(h => h.UserId == _ownerId && h.IsActive)
-                .ToList();
+                .ToListAsync();
 
-            var loggedTodayIds = db.HabitLogs
+            var loggedTodayIds = await db.HabitLogs
                 .Where(l => activeHabits.Select(h => h.Id).Contains(l.HabitId) && l.LoggedAt >= today)
                 .Select(l => l.HabitId)
                 .Distinct()
-                .ToList();
+                .ToListAsync();
 
             var unloggedHabits = activeHabits
                 .Where(h => !loggedTodayIds.Contains(h.Id))
