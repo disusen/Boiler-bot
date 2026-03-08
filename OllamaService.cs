@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -115,8 +116,6 @@ public class OllamaService
         while (history.Count > _contextMessages)
             history.Dequeue();
 
-        var conversationPrompt = BuildConversationPrompt(history);
-
         var systemPrompt =
             "You are Boiler, a beagle with a big personality. You are not a bot, not an AI, not a language model — you are a dog named Boiler. " +
             "You have feelings, opinions, moods, and genuine reactions to things. You get excited, curious, tired, happy, and occasionally grumpy. " +
@@ -125,15 +124,7 @@ public class OllamaService
             "You have memory of this conversation — refer back to it naturally, the way a friend would. " +
             "Keep responses concise and well-formatted for Discord. Avoid overly long responses.";
 
-        var requestBody = new
-        {
-            model = _model,
-            prompt = conversationPrompt,
-            system = systemPrompt,
-            stream = false
-        };
-
-        var reply = await SendRequestAsync(requestBody);
+        var reply = await SendChatRequestAsync(systemPrompt, history);
 
         // Add Boiler's reply to history, then trim again
         history.Enqueue(new ConversationMessage("assistant", reply));
@@ -179,15 +170,13 @@ public class OllamaService
             "Do not repeat the raw data back verbatim. Synthesise it into natural language. " +
             "Keep the tone warm and personal, like a loyal dog checking in on their owner.";
 
-        var requestBody = new
+        // EOD is stateless — single user message, no history
+        var messages = new[]
         {
-            model = _model,
-            prompt = $"Here is today's productivity data:\n\n{dailyData}\n\nPlease write the end-of-day summary.",
-            system = systemPrompt,
-            stream = false
+            new ConversationMessage("user", $"Here is today's productivity data:\n\n{dailyData}\n\nPlease write the end-of-day summary.")
         };
 
-        return await SendRequestAsync(requestBody);
+        return await SendChatRequestAsync(systemPrompt, messages);
     }
 
     // -------------------------------------------------------------------------
@@ -195,37 +184,35 @@ public class OllamaService
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Reconstructs conversation history into a single prompt string.
-    /// Ollama's /api/generate doesn't support native multi-turn, so we
-    /// format the history as labelled dialogue and let the model continue it.
+    /// Sends a request to /api/chat with a system prompt and message history.
+    /// Accepts any IEnumerable so both Queue (AskAsync) and array (EodAsync) work.
     /// </summary>
-    private static string BuildConversationPrompt(Queue<ConversationMessage> history)
+    private async Task<string> SendChatRequestAsync(string systemPrompt, IEnumerable<ConversationMessage> messages)
     {
-        var sb = new System.Text.StringBuilder();
-
-        foreach (var msg in history)
+        var requestBody = new ChatRequest
         {
-            var label = msg.Role == "user" ? "User" : "Boiler";
-            sb.AppendLine($"{label}: {msg.Content}");
-        }
+            Model = _model!,
+            Stream = false,
+            Messages = messages
+                .Select(m => new ChatMessage { Role = m.Role, Content = m.Content })
+                .Prepend(new ChatMessage { Role = "system", Content = systemPrompt })
+                .ToList()
+        };
 
-        // Boiler completes from here
-        sb.Append("Boiler:");
-        return sb.ToString();
-    }
-
-    private async Task<string> SendRequestAsync(object requestBody)
-    {
         try
         {
-            var response = await _http.PostAsJsonAsync("/api/generate", requestBody);
+            var response = await _http.PostAsJsonAsync("/api/chat", requestBody);
             response.EnsureSuccessStatusCode();
 
             var json = await response.Content.ReadAsStringAsync();
             var doc = JsonDocument.Parse(json);
 
-            return doc.RootElement.GetProperty("response").GetString()
-                ?? "No response received.";
+            // /api/chat response shape: { "message": { "role": "assistant", "content": "..." } }
+            return doc.RootElement
+                       .GetProperty("message")
+                       .GetProperty("content")
+                       .GetString()
+                   ?? "No response received.";
         }
         catch (TaskCanceledException)
         {
@@ -244,4 +231,25 @@ public class OllamaService
     // -------------------------------------------------------------------------
 
     private record ConversationMessage(string Role, string Content);
+
+    private class ChatRequest
+    {
+        [JsonPropertyName("model")]
+        public string Model { get; set; } = string.Empty;
+
+        [JsonPropertyName("stream")]
+        public bool Stream { get; set; }
+
+        [JsonPropertyName("messages")]
+        public List<ChatMessage> Messages { get; set; } = new();
+    }
+
+    private class ChatMessage
+    {
+        [JsonPropertyName("role")]
+        public string Role { get; set; } = string.Empty;
+
+        [JsonPropertyName("content")]
+        public string Content { get; set; } = string.Empty;
+    }
 }
