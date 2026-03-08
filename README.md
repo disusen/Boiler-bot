@@ -176,7 +176,7 @@ On startup, after you select a model, Boiler probes for tool support and reports
 ```
 ✅ Model set to qwen2.5:14b. !ask and !eod are ready to go!
 🔧 Testing tool call support...
-🛠️ Tools enabled — !ask can manage tasks, habits, and reminders using natural language.
+🛠️ Tools enabled - !ask can manage tasks, habits, and reminders using natural language.
 ```
 
 If the model doesn't support tools:
