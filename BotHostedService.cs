@@ -155,7 +155,13 @@ public class BotHostedService : IHostedService
         }
 
         _ollama.SetModel(chosen);
-        await dmChannel.SendMessageAsync($"✅ Model set to **{chosen}**. `!ask` and `!eod` are ready to go!");
+
+        // Probe for tool call support
+        await dmChannel.SendMessageAsync($"✅ Model set to **{chosen}**. `!ask` and `!eod` are ready to go!\n🔧 Testing tool call support...");
+        var toolsSupported = await _ollama.ProbeToolSupportAsync();
+        await dmChannel.SendMessageAsync(toolsSupported
+            ? "🛠️ Tools enabled — `!ask` can manage tasks, habits, and reminders using natural language."
+            : "⚠️ This model doesn't support tool calls — `!ask` will work conversationally only.\nTip: try `ollama pull qwen2.5:7b` or `llama3.1:8b` for tool use support.");
 
         // Start EOD after model is confirmed active
         _eodService.Start(_client);
