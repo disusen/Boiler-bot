@@ -8,7 +8,8 @@ A personal Discord productivity bot built with Discord.NET and C#, named after a
 - 🌿 **Habit Tracking** - daily/weekly habits with streak tracking
 - ⏰ **Reminders** - one-shot reminders with flexible time input (`30m`, `2h`, `1d`, or datetime)
 - 🤖 **Local AI Assistant** - ask anything via a locally running LLM through Ollama, with per-channel conversation memory - no API keys or cloud required
-- 🛠️ **Natural Language Tool Use** - tell Boiler to add tasks, log habits, or set reminders in plain English via `!ask` (requires a tool-capable model - see below)
+- 🛠️ **Natural Language Tool Use** - tell Boiler to add tasks, log habits, or set reminders in plain English via `!ask` (requires a tool-capable model — see below)
+- 💭 **Boiler's Inner Monologue** - when left alone long enough, Boiler starts posting unprompted thoughts to a designated channel, aware of your pending tasks and unlogged habits
 - 🌙 **End-of-Day Summary** - AI-generated daily recap of tasks and habits delivered to your DMs at 9pm, or on demand with `!eod`
 
 ## Setup
@@ -58,14 +59,20 @@ Edit `config/appsettings.json`:
     "ContextMessages": 20
   },
   "Bot": {
-    "Timezone": "Europe/London"
+    "Timezone": "Europe/London",
+    "RamblingChannelId": "YOUR_BOILER_THOUGHTS_CHANNEL_ID",
+    "RamblingIdleThresholdMinutes": "120"
   }
 }
 ```
 
 **`Ollama:ContextMessages`** - how many messages Boiler remembers per conversation (default: `20`). Each exchange (your message + Boiler's reply) counts as 2. With a 16k context window, 20 is well within safe limits.
 
-**`Bot:Timezone`** — controls when the automatic 9pm EOD summary fires. Use IANA timezone IDs on Linux/macOS (e.g. `Europe/Vilnius`, `America/New_York`) or Windows timezone names on Windows (e.g. `Eastern Standard Time`). Defaults to `UTC` if not set or unrecognised.
+**`Bot:Timezone`** - controls when the automatic 9pm EOD summary fires. Use IANA timezone IDs on Linux/macOS (e.g. `Europe/Vilnius`, `America/New_York`) or Windows timezone names on Windows (e.g. `Eastern Standard Time`). Defaults to `UTC` if not set or unrecognised.
+
+**`Bot:RamblingChannelId`** - Discord channel ID for Boiler's unprompted thoughts. Right-click the channel → Copy Channel ID (requires Developer Mode). If omitted, rambling is disabled.
+
+**`Bot:RamblingIdleThresholdMinutes`** - how many minutes of `!ask` inactivity before Boiler enters rambling mode. Each interval after that has a 33% chance to post. Set low (e.g. `2`) for testing, `120` for normal use. Defaults to `120` if omitted.
 
 To get your Discord user ID: go to **Settings → Advanced**, enable **Developer Mode**, then right-click your username anywhere and select **Copy User ID**.
 
@@ -155,7 +162,7 @@ dotnet run --project ProductivityBot.csproj
 
 ## Natural Language Tool Use
 
-When a tool-capable model is selected, `!ask` can do more than just chat - it can directly manage your tasks, habits, and reminders using plain English. Explicit prefix commands (`!task`, `!habit`, `!remind`) always work regardless of model.
+When a tool-capable model is selected, `!ask` can do more than just chat — it can directly manage your tasks, habits, and reminders using plain English. Explicit prefix commands (`!task`, `!habit`, `!remind`) always work regardless of model.
 
 **Examples:**
 - `!ask add a high priority task to review the PR due tomorrow`
@@ -176,15 +183,31 @@ On startup, after you select a model, Boiler probes for tool support and reports
 ```
 ✅ Model set to qwen2.5:14b. !ask and !eod are ready to go!
 🔧 Testing tool call support...
-🛠️ Tools enabled - !ask can manage tasks, habits, and reminders using natural language.
+🛠️ Tools enabled — !ask can manage tasks, habits, and reminders using natural language.
 ```
 
 If the model doesn't support tools:
 
 ```
-⚠️ This model doesn't support tool calls - !ask will work conversationally only.
+⚠️ This model doesn't support tool calls — !ask will work conversationally only.
 Tip: try ollama pull qwen2.5:7b or llama3.1:8b for tool use support.
 ```
+
+## Boiler's Inner Monologue
+
+When `!ask` hasn't been used for a configurable idle period, Boiler starts posting unprompted thoughts to a designated channel. Each interval has a 33% chance to fire, keeping it unpredictable.
+
+Rambles build on each other - Boiler's thoughts are fed back as context for the next one, so over a long idle session the monologue naturally drifts and gets stranger without any explicit scripting. The history resets the moment you use `!ask`.
+
+Before each ramble, Boiler quietly checks your pending tasks and unlogged habits for the day. It may or may not reference them - the context is a suggestion, not a script.
+
+**Setup:**
+1. Create a channel called `#boiler-thoughts` in your server
+2. Right-click it → Copy Channel ID
+3. Add `Bot:RamblingChannelId` to your config
+4. Set `Bot:RamblingIdleThresholdMinutes` to your preferred idle threshold
+
+Rambling requires an active Ollama model and is silently disabled if either config key is missing.
 
 ## Model Compatibility
 
@@ -208,7 +231,7 @@ A model showing only `completion` will work for `!ask` conversationally but cann
 
 | Model | VRAM | Tool Use | Notes |
 |---|---|---|---|
-| `qwen2.5:14b` | ~9GB | ✅ | Recommended - best quality at this size |
+| `qwen2.5:14b` | ~9GB | ✅ | Recommended — best quality at this size |
 | `qwen2.5:7b` | ~5GB | ✅ | Good tool use, lighter footprint |
 | `llama3.1:8b` | ~5GB | ✅ | Solid alternative |
 | `phi4:latest` | ~9GB | ❌ | No tools in current Ollama Modelfile |
@@ -282,6 +305,7 @@ Boiler-bot/
 │   ├── HabitService.cs           # Habit + streak logic
 │   ├── ReminderService.cs        # Background reminder timer
 │   ├── OllamaService.cs          # Ollama HTTP client, conversation history, tool calling
+│   ├── RamblingService.cs        # Idle-triggered rambling with owner context and history
 │   └── EodService.cs             # End-of-day summary logic + timer
 ├── Models/
 │   └── Models.cs                 # EF Core entity models
