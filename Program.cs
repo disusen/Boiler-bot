@@ -59,6 +59,7 @@ class Program
                 // Companion memory layer
                 services.AddSingleton<MemoryService>();
                 services.AddSingleton<PersonalityService>();
+                services.AddSingleton<BeliefService>();
 
                 // Hosted service that runs the bot
                 services.AddHostedService<BotHostedService>();

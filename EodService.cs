@@ -25,9 +25,11 @@ public class EodService
     // Injected lazily — PersonalityService depends on EodService indirectly
     private MemoryService? _memoryService;
     private PersonalityService? _personalityService;
+    private BeliefService? _beliefService;
 
     public void SetMemoryService(MemoryService memoryService) => _memoryService = memoryService;
     public void SetPersonalityService(PersonalityService personalityService) => _personalityService = personalityService;
+    public void SetBeliefService(BeliefService beliefService) => _beliefService = beliefService;
 
     private DiscordSocketClient? _client;
     private Timer? _timer;
@@ -354,6 +356,23 @@ public class EodService
             // Trigger a personality reflection after EOD so BotState updates with fresh context
             if (_personalityService is not null)
                 _ = Task.Run(() => _personalityService.RunReflectionAsync(_ownerId));
+
+            // Trigger belief inference from EOD signal
+            if (_beliefService is not null)
+            {
+                var eodEvidence = new System.Text.StringBuilder();
+                eodEvidence.AppendLine($"EOD signal for {signal.Date:MMM d}:");
+                eodEvidence.AppendLine($"  Tasks completed: {signal.TasksCompleted}");
+                eodEvidence.AppendLine($"  Habits logged: {signal.HabitsLogged}/{signal.TotalHabits}");
+                if (signal.MissedHabitNames.Any())
+                    eodEvidence.AppendLine($"  Missed habits: {string.Join(", ", signal.MissedHabitNames)}");
+                eodEvidence.AppendLine($"  Day quality: {(dayWasGood ? "productive" : dayWasRough ? "rough" : "mixed")}");
+                eodEvidence.AppendLine($"  Consecutive rough days: {state.ConsecutiveRoughDays}");
+                eodEvidence.AppendLine($"  Consecutive good days: {state.ConsecutiveGoodDays}");
+
+                var captured = eodEvidence.ToString();
+                _ = Task.Run(() => _beliefService.RunBeliefInferenceAsync(_ownerId, _ollama, captured));
+            }
 
             _logger.LogInformation("EOD reflection stored for {Date}. Valence: {Valence}, Good streak: {Good}, Rough streak: {Rough}",
                 date, valence, state.ConsecutiveGoodDays, state.ConsecutiveRoughDays);

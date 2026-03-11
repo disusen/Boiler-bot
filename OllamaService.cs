@@ -37,9 +37,11 @@ public class OllamaService
     // Injected lazily to avoid circular dependency
     private RamblingService? _ramblingService;
     private MemoryService? _memoryService;
+    private BeliefService? _beliefService;
 
     public void SetRamblingService(RamblingService ramblingService) => _ramblingService = ramblingService;
     public void SetMemoryService(MemoryService memoryService) => _memoryService = memoryService;
+    public void SetBeliefService(BeliefService beliefService) => _beliefService = beliefService;
 
     public OllamaService(IConfiguration config, ILogger<OllamaService> logger, IServiceProvider services)
     {
@@ -200,7 +202,16 @@ public class OllamaService
             ? await _memoryService.HydrateAsync(userId)
             : string.Empty;
 
-        var systemPrompt = BuildAskSystemPrompt(memoryContext);
+        // Hydrate belief directives — Boiler's worldview gates its behavior
+        var beliefDirectives = _beliefService is not null
+            ? await _beliefService.GetBehavioralDirectivesAsync(userId)
+            : string.Empty;
+
+        var tentativeAwareness = _beliefService is not null
+            ? await _beliefService.GetTentativeAwarenessAsync(userId)
+            : string.Empty;
+
+        var systemPrompt = BuildAskSystemPrompt(memoryContext, beliefDirectives, tentativeAwareness);
         var messages = BuildMessages(systemPrompt, history);
 
         string reply;
@@ -285,7 +296,7 @@ public class OllamaService
     //  System prompt builder — now accepts memory context
     // -------------------------------------------------------------------------
 
-    private static string BuildAskSystemPrompt(string memoryContext)
+    private static string BuildAskSystemPrompt(string memoryContext, string beliefDirectives = "", string tentativeAwareness = "")
     {
         var sb = new System.Text.StringBuilder();
 
@@ -299,6 +310,20 @@ public class OllamaService
             $"The current exact UTC date and time is {DateTime.UtcNow:yyyy-MM-dd HH:mm}. " +
             "When calculating future times such as 'in 2 hours', 'tomorrow', or 'next friday', you MUST calculate from this exact datetime. Never assume a different date. " +
             "Always produce fire_at values as full ISO 8601 UTC datetimes calculated from the time above.");
+
+        if (!string.IsNullOrWhiteSpace(beliefDirectives))
+        {
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.Append(beliefDirectives);
+        }
+
+        if (!string.IsNullOrWhiteSpace(tentativeAwareness))
+        {
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.Append(tentativeAwareness);
+        }
 
         if (!string.IsNullOrWhiteSpace(memoryContext))
         {
@@ -406,6 +431,31 @@ public class OllamaService
             {
                 new() { Role = "system", Content = "You are a precise memory extraction system. Follow the format instructions exactly." },
                 new() { Role = "user",   Content = extractionPrompt }
+            }
+        };
+
+        return await SendChatRequestAsync(request);
+    }
+
+    // -------------------------------------------------------------------------
+    //  Belief inference — called by BeliefService
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Sends a belief inference prompt and returns the raw output for BeliefService to parse.
+    /// </summary>
+    public async Task<string> InferBeliefsAsync(string inferencePrompt)
+    {
+        if (_model is null) return string.Empty;
+
+        var request = new ChatRequest
+        {
+            Model = _model,
+            Stream = false,
+            Messages = new List<ChatMessage>
+            {
+                new() { Role = "system", Content = "You are Boiler's belief inference system. Analyse patterns carefully. Follow the output format exactly. Be specific — vague beliefs are useless." },
+                new() { Role = "user",   Content = inferencePrompt }
             }
         };
 

@@ -19,6 +19,7 @@ public class BotDbContext : DbContext
     public DbSet<BotFact> Facts => Set<BotFact>();
     public DbSet<BotState> BotStates => Set<BotState>();
     public DbSet<BotGoal> Goals => Set<BotGoal>();
+    public DbSet<BotBelief> Beliefs => Set<BotBelief>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -101,6 +102,19 @@ public class BotDbContext : DbContext
             e.Property(g => g.Description).HasMaxLength(500).IsRequired();
             e.Property(g => g.Reason).HasMaxLength(500);
             e.Property(g => g.Notes).HasMaxLength(1000);
+        });
+
+        modelBuilder.Entity<BotBelief>(e =>
+        {
+            e.HasKey(b => b.Id);
+            // Primary lookup: user's active beliefs
+            e.HasIndex(b => new { b.UserId, b.Status });
+            // BeliefKey uniqueness per user — used for confirm/contradict lookups
+            e.HasIndex(b => new { b.UserId, b.BeliefKey }).IsUnique();
+            e.Property(b => b.Claim).HasMaxLength(500).IsRequired();
+            e.Property(b => b.BeliefKey).HasMaxLength(100).IsRequired();
+            e.Property(b => b.BehavioralImplication).HasMaxLength(500);
+            e.Property(b => b.FormationEvidence).HasMaxLength(1000);
         });
     }
 }

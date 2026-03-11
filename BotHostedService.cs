@@ -17,6 +17,7 @@ public class BotHostedService : IHostedService
     private readonly RamblingService _ramblingService;
     private readonly MemoryService _memoryService;
     private readonly PersonalityService _personalityService;
+    private readonly BeliefService _beliefService;
     private readonly IConfiguration _config;
     private readonly ILogger<BotHostedService> _logger;
 
@@ -29,6 +30,7 @@ public class BotHostedService : IHostedService
         RamblingService ramblingService,
         MemoryService memoryService,
         PersonalityService personalityService,
+        BeliefService beliefService,
         IConfiguration config,
         ILogger<BotHostedService> logger)
     {
@@ -40,6 +42,7 @@ public class BotHostedService : IHostedService
         _ramblingService = ramblingService;
         _memoryService = memoryService;
         _personalityService = personalityService;
+        _beliefService = beliefService;
         _config = config;
         _logger = logger;
     }
@@ -169,9 +172,12 @@ public class BotHostedService : IHostedService
         // Wire up the companion memory layer
         _ollama.SetMemoryService(_memoryService);
         _ollama.SetRamblingService(_ramblingService);
+        _ollama.SetBeliefService(_beliefService);
         _ramblingService.SetMemoryService(_memoryService);
         _eodService.SetMemoryService(_memoryService);
         _eodService.SetPersonalityService(_personalityService);
+        _eodService.SetBeliefService(_beliefService);
+        _memoryService.SetBeliefService(_beliefService);
 
         // Start all services
         _eodService.Start(_client);

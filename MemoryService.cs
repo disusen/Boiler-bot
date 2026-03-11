@@ -21,7 +21,9 @@ public class MemoryService
     private readonly IServiceProvider _services;
     private readonly ILogger<MemoryService> _logger;
 
-    // How many memories / facts to surface per prompt — enough context without blowing token budget
+    // Injected lazily — BeliefService depends on nothing in MemoryService
+    private BeliefService? _beliefService;
+    public void SetBeliefService(BeliefService beliefService) => _beliefService = beliefService;
     private const int MaxMemoriesInPrompt = 8;
     private const int MaxFactsInPrompt = 12;
 
@@ -148,6 +150,13 @@ public class MemoryService
 
             _logger.LogDebug("MemoryService: stored {Facts} facts and {Memories} memories for user {UserId}",
                 parsed.facts.Count, parsed.memories.Count, userId);
+
+            // Trigger belief inference with the new evidence — fire and forget
+            if (_beliefService is not null && (parsed.facts.Count > 0 || parsed.memories.Count > 0))
+            {
+                var evidenceSummary = BuildEvidenceSummary(parsed.facts, parsed.memories);
+                _ = Task.Run(() => _beliefService.RunBeliefInferenceAsync(userId, ollama, evidenceSummary));
+            }
         }
         catch (Exception ex)
         {
@@ -514,6 +523,26 @@ public class MemoryService
     // -------------------------------------------------------------------------
     //  Extraction prompt + parser
     // -------------------------------------------------------------------------
+
+    private static string BuildEvidenceSummary(
+        List<(string content, FactCategory category, string? key, float confidence)> facts,
+        List<(string content, EmotionalValence valence, float importance, string? tag)> memories)
+    {
+        var sb = new System.Text.StringBuilder();
+        if (facts.Any())
+        {
+            sb.AppendLine("New facts observed:");
+            foreach (var (content, _, _, _) in facts)
+                sb.AppendLine($"  - {content}");
+        }
+        if (memories.Any())
+        {
+            sb.AppendLine("New memories formed:");
+            foreach (var (content, valence, importance, _) in memories)
+                sb.AppendLine($"  - [{valence}] {content}");
+        }
+        return sb.ToString().Trim();
+    }
 
     private static string BuildExtractionPrompt(string userMessage, string boilerReply)
         => $"""
