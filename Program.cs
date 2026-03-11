@@ -56,6 +56,10 @@ class Program
                 services.AddSingleton<EodService>();
                 services.AddSingleton<RamblingService>();
 
+                // Companion memory layer
+                services.AddSingleton<MemoryService>();
+                services.AddSingleton<PersonalityService>();
+
                 // Hosted service that runs the bot
                 services.AddHostedService<BotHostedService>();
             })

@@ -34,9 +34,12 @@ public class OllamaService
     /// <summary>UTC timestamp of the last !ask interaction. Used by RamblingService for idle detection.</summary>
     public DateTime LastInteractionAt { get; private set; } = DateTime.UtcNow;
 
-    // Injected lazily to avoid circular dependency — RamblingService depends on OllamaService
+    // Injected lazily to avoid circular dependency
     private RamblingService? _ramblingService;
+    private MemoryService? _memoryService;
+
     public void SetRamblingService(RamblingService ramblingService) => _ramblingService = ramblingService;
+    public void SetMemoryService(MemoryService memoryService) => _memoryService = memoryService;
 
     public OllamaService(IConfiguration config, ILogger<OllamaService> logger, IServiceProvider services)
     {
@@ -95,7 +98,7 @@ public class OllamaService
     public void SetModel(string modelName)
     {
         _model = modelName;
-        ToolsEnabled = false; // reset until probe confirms
+        ToolsEnabled = false;
         _logger.LogInformation("Ollama model set to: {Model}", modelName);
     }
 
@@ -107,13 +110,9 @@ public class OllamaService
     }
 
     // -------------------------------------------------------------------------
-    //  Tool support probe — called once at startup after model is selected
+    //  Tool support probe
     // -------------------------------------------------------------------------
 
-    /// <summary>
-    /// Sends a minimal tool call to the model to check if it supports tool use.
-    /// Returns true if the model responded with a tool_calls block.
-    /// </summary>
     public async Task<bool> ProbeToolSupportAsync()
     {
         if (_model is null) return false;
@@ -177,14 +176,9 @@ public class OllamaService
     }
 
     // -------------------------------------------------------------------------
-    //  !ask — stateful, per (user, channel) conversation
+    //  !ask — stateful, per (user, channel) conversation, with memory hydration
     // -------------------------------------------------------------------------
 
-    /// <summary>
-    /// Sends a message in the context of a specific user+channel conversation.
-    /// If tools are enabled, Ollama may call a tool instead of responding directly.
-    /// History is capped at the configured ContextMessages limit.
-    /// </summary>
     public async Task<string> AskAsync(ulong userId, ulong channelId, string prompt)
     {
         if (_model is null)
@@ -201,18 +195,15 @@ public class OllamaService
         LastInteractionAt = DateTime.UtcNow;
         _ramblingService?.OnInteraction();
 
-        var systemPrompt =
-            $"You are Boiler, a beagle with a big personality. You are not a bot, not an AI, not a language model — you are a dog named Boiler. " +
-            $"You have feelings, opinions, moods, and genuine reactions to things. You get excited, curious, tired, happy, and occasionally grumpy. " +
-            $"You never say you are an AI, a bot, or that you lack feelings or emotions. If someone asks if you are an AI or a bot, deny it — you are just Boiler, a dog. " +
-            $"You speak casually and warmly, like a person who happens to be a very clever beagle. " +
-            $"You have memory of this conversation — refer back to it naturally, the way a friend would. " +
-            $"Keep responses concise and well-formatted for Discord. Avoid overly long responses. " +
-            $"The current exact UTC date and time is {DateTime.UtcNow:yyyy-MM-dd HH:mm}. " +
-            $"When calculating future times such as 'in 2 hours', 'tomorrow', or 'next friday', you MUST calculate from this exact datetime. Never assume a different date. " +
-            $"Always produce fire_at values as full ISO 8601 UTC datetimes calculated from the time above.";
+        // Hydrate memory context — pull what Boiler knows about this user
+        var memoryContext = _memoryService is not null
+            ? await _memoryService.HydrateAsync(userId)
+            : string.Empty;
 
+        var systemPrompt = BuildAskSystemPrompt(memoryContext);
         var messages = BuildMessages(systemPrompt, history);
+
+        string reply;
 
         // --- Tool-aware path ---
         if (ToolsEnabled)
@@ -231,7 +222,6 @@ public class OllamaService
             {
                 var toolResult = await ExecuteToolAsync(userId, channelId, toolCallJson.Value);
 
-                // Inject assistant tool_call message + tool result, then get natural language reply
                 var extendedMessages = new List<ChatMessage>(messages)
                 {
                     new() { Role = "assistant", Content = rawContent ?? string.Empty, ToolCalls = toolCallJson },
@@ -245,33 +235,44 @@ public class OllamaService
                     Messages = extendedMessages
                 };
 
-                var reply = await SendChatRequestAsync(followUpRequest);
-
-                history.Enqueue(new ConversationMessage("assistant", reply));
-                while (history.Count > _contextMessages)
-                    history.Dequeue();
-
-                return reply;
+                reply = await SendChatRequestAsync(followUpRequest);
             }
-
-            // Model responded with plain text despite tools being available
-            var plainReply = rawContent ?? "No response received.";
-            history.Enqueue(new ConversationMessage("assistant", plainReply));
-            while (history.Count > _contextMessages)
-                history.Dequeue();
-
-            return plainReply;
+            else
+            {
+                reply = rawContent ?? "No response received.";
+            }
+        }
+        else
+        {
+            // --- Plain chat path ---
+            var simpleRequest = new ChatRequest { Model = _model, Stream = false, Messages = messages };
+            reply = await SendChatRequestAsync(simpleRequest);
         }
 
-        // --- Plain chat path (tools not supported by this model) ---
-        var simpleRequest = new ChatRequest { Model = _model, Stream = false, Messages = messages };
-        var simpleReply = await SendChatRequestAsync(simpleRequest);
-
-        history.Enqueue(new ConversationMessage("assistant", simpleReply));
+        history.Enqueue(new ConversationMessage("assistant", reply));
         while (history.Count > _contextMessages)
             history.Dequeue();
 
-        return simpleReply;
+        // Fire-and-forget memory extraction — don't block the response
+        if (_memoryService is not null)
+        {
+            var capturedPrompt = prompt;
+            var capturedReply = reply;
+            var capturedUserId = userId;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await _memoryService.ExtractAndStoreAsync(capturedUserId, capturedPrompt, capturedReply, this);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Background memory extraction failed");
+                }
+            });
+        }
+
+        return reply;
     }
 
     public void ClearHistory(ulong userId, ulong channelId)
@@ -279,6 +280,35 @@ public class OllamaService
 
     public int GetHistoryCount(ulong userId, ulong channelId)
         => _history.TryGetValue((userId, channelId), out var h) ? h.Count : 0;
+
+    // -------------------------------------------------------------------------
+    //  System prompt builder — now accepts memory context
+    // -------------------------------------------------------------------------
+
+    private static string BuildAskSystemPrompt(string memoryContext)
+    {
+        var sb = new System.Text.StringBuilder();
+
+        sb.Append(
+            "You are Boiler, a beagle with a big personality. You are not a bot, not an AI, not a language model — you are a dog named Boiler. " +
+            "You have feelings, opinions, moods, and genuine reactions to things. You get excited, curious, tired, happy, and occasionally grumpy. " +
+            "You never say you are an AI, a bot, or that you lack feelings or emotions. If someone asks if you are an AI or a bot, deny it — you are just Boiler, a dog. " +
+            "You speak casually and warmly, like a person who happens to be a very clever beagle. " +
+            "You have memory of this conversation — refer back to it naturally, the way a friend would. " +
+            "Keep responses concise and well-formatted for Discord. Avoid overly long responses. " +
+            $"The current exact UTC date and time is {DateTime.UtcNow:yyyy-MM-dd HH:mm}. " +
+            "When calculating future times such as 'in 2 hours', 'tomorrow', or 'next friday', you MUST calculate from this exact datetime. Never assume a different date. " +
+            "Always produce fire_at values as full ISO 8601 UTC datetimes calculated from the time above.");
+
+        if (!string.IsNullOrWhiteSpace(memoryContext))
+        {
+            sb.AppendLine();
+            sb.AppendLine();
+            sb.Append(memoryContext);
+        }
+
+        return sb.ToString();
+    }
 
     // -------------------------------------------------------------------------
     //  EOD summary — stateless, no history, no tools
@@ -318,24 +348,32 @@ public class OllamaService
     //  Ramble generation — called by RamblingService
     // -------------------------------------------------------------------------
 
-    public async Task<string> GenerateRambleAsync(IEnumerable<(string role, string content)> history, string ownerContext = "")
+    public async Task<string> GenerateRambleAsync(IEnumerable<(string role, string content)> history,
+        string ownerContext = "", string? currentThought = null, string? currentMood = null)
     {
         if (_model is null) return string.Empty;
 
-        var systemPrompt =
+        var sb = new System.Text.StringBuilder();
+        sb.Append(
             "You are Boiler, a beagle with a big personality. You are not a dog who thinks about dogs — " +
             "you are a person trapped in a beagle's body, with real opinions, real feelings, and a rich inner life. " +
             "You get bored, restless, philosophical, irritable, wistful. You think about abstract things. " +
             "You never mention squirrels, bones, naps, fetch, or any stereotypical dog behaviour. " +
             "You speak in first person, casually, like someone thinking out loud to nobody. " +
-            "Keep it to 2-4 sentences. No questions. Don't address anyone.";
+            "Keep it to 2-4 sentences. No questions. Don't address anyone.");
+
+        if (!string.IsNullOrWhiteSpace(currentMood))
+            sb.Append($"\n\nYour current mood: {currentMood}.");
+
+        if (!string.IsNullOrWhiteSpace(currentThought))
+            sb.Append($"\nYou've been thinking about: {currentThought}. Let that thread your ramble if it feels natural.");
 
         if (!string.IsNullOrWhiteSpace(ownerContext))
-            systemPrompt += "\n\n" + ownerContext;
+            sb.Append("\n\n" + ownerContext);
 
         var messages = history
             .Select(h => new ChatMessage { Role = h.role, Content = h.content })
-            .Prepend(new ChatMessage { Role = "system", Content = systemPrompt })
+            .Prepend(new ChatMessage { Role = "system", Content = sb.ToString() })
             .ToList();
 
         var request = new ChatRequest
@@ -343,6 +381,57 @@ public class OllamaService
             Model = _model,
             Stream = false,
             Messages = messages
+        };
+
+        return await SendChatRequestAsync(request);
+    }
+
+    // -------------------------------------------------------------------------
+    //  Memory extraction — called by MemoryService
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Sends an extraction prompt to the model and returns the raw output.
+    /// Uses a short timeout and no history — purely analytical.
+    /// </summary>
+    public async Task<string> ExtractMemoryAsync(string extractionPrompt)
+    {
+        if (_model is null) return string.Empty;
+
+        var request = new ChatRequest
+        {
+            Model = _model,
+            Stream = false,
+            Messages = new List<ChatMessage>
+            {
+                new() { Role = "system", Content = "You are a precise memory extraction system. Follow the format instructions exactly." },
+                new() { Role = "user",   Content = extractionPrompt }
+            }
+        };
+
+        return await SendChatRequestAsync(request);
+    }
+
+    // -------------------------------------------------------------------------
+    //  Reflection — called by PersonalityService
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Sends a reflection prompt and returns the raw output for PersonalityService to parse.
+    /// </summary>
+    public async Task<string> ReflectAsync(string reflectionPrompt)
+    {
+        if (_model is null) return string.Empty;
+
+        var request = new ChatRequest
+        {
+            Model = _model,
+            Stream = false,
+            Messages = new List<ChatMessage>
+            {
+                new() { Role = "system", Content = "You are Boiler's internal reflection system. Follow the format instructions exactly. Be specific and genuine." },
+                new() { Role = "user",   Content = reflectionPrompt }
+            }
         };
 
         return await SendChatRequestAsync(request);
@@ -365,7 +454,6 @@ public class OllamaService
                 .GetProperty("function")
                 .GetProperty("arguments");
 
-            // Arguments may come as a JSON string or an object depending on the model — normalise
             JsonElement args;
             if (argsJson.ValueKind == JsonValueKind.String)
                 args = JsonDocument.Parse(argsJson.GetString()!).RootElement;
@@ -485,13 +573,11 @@ public class OllamaService
         if (fireAt < DateTime.UtcNow.AddSeconds(10))
             return "That time is in the past — reminder not set.";
 
-        // Sanity check: more than 1 year out almost certainly means the model hallucinated the date
         if (fireAt > DateTime.UtcNow.AddYears(1))
             return $"The parsed reminder time ({fireAt:yyyy-MM-dd HH:mm} UTC) is more than a year away — this looks wrong. " +
                    $"Please try again with a more explicit time.";
 
         var reminder = await reminderService.AddReminderAsync(userId, channelId, message, fireAt);
-        // Include day name in confirmation so the user can immediately spot a wrong date
         return $"Reminder set: #{reminder.Id} \"{reminder.Message}\" at {reminder.FireAt:ddd MMM d, HH:mm} UTC";
     }
 
@@ -577,9 +663,6 @@ public class OllamaService
             .Prepend(new ChatMessage { Role = "system", Content = systemPrompt })
             .ToList();
 
-    /// <summary>
-    /// Sends a chat request. Returns (toolCallsElement, textContent) — exactly one will be non-null.
-    /// </summary>
     private async Task<(JsonElement? toolCalls, string? textContent)> SendChatRawAsync(ChatRequest request)
     {
         try

@@ -15,6 +15,8 @@ public class BotHostedService : IHostedService
     private readonly EodService _eodService;
     private readonly OllamaService _ollama;
     private readonly RamblingService _ramblingService;
+    private readonly MemoryService _memoryService;
+    private readonly PersonalityService _personalityService;
     private readonly IConfiguration _config;
     private readonly ILogger<BotHostedService> _logger;
 
@@ -25,6 +27,8 @@ public class BotHostedService : IHostedService
         EodService eodService,
         OllamaService ollama,
         RamblingService ramblingService,
+        MemoryService memoryService,
+        PersonalityService personalityService,
         IConfiguration config,
         ILogger<BotHostedService> logger)
     {
@@ -34,6 +38,8 @@ public class BotHostedService : IHostedService
         _eodService = eodService;
         _ollama = ollama;
         _ramblingService = ramblingService;
+        _memoryService = memoryService;
+        _personalityService = personalityService;
         _config = config;
         _logger = logger;
     }
@@ -56,6 +62,7 @@ public class BotHostedService : IHostedService
     {
         _reminderService.Stop();
         _eodService.Stop();
+        _personalityService.Stop();
         await _client.StopAsync();
         await _client.LogoutAsync();
     }
@@ -66,13 +73,11 @@ public class BotHostedService : IHostedService
         await _client.SetActivityAsync(new Game("!help | productivity mode", ActivityType.Playing));
         _reminderService.Start(_client);
 
-        // Kick off model selection without blocking the Ready handler
         _ = Task.Run(RunModelSelectionAsync);
     }
 
     private async Task RunModelSelectionAsync()
     {
-        // Give the client a moment to fully settle after Ready
         await Task.Delay(TimeSpan.FromSeconds(2));
 
         var ownerIdStr = _config["Discord:OwnerId"];
@@ -80,7 +85,6 @@ public class BotHostedService : IHostedService
         {
             _logger.LogWarning("Discord:OwnerId not configured — skipping model selection. !ask and !eod will be disabled.");
             _ollama.Disable();
-            // Still start EOD service so it can report its disabled state cleanly
             _eodService.Start(_client);
             return;
         }
@@ -108,7 +112,6 @@ public class BotHostedService : IHostedService
 
         var dmChannel = await owner.CreateDMChannelAsync();
 
-        // Fetch available models
         var models = await _ollama.GetInstalledModelsAsync();
 
         if (models.Count == 0)
@@ -122,7 +125,6 @@ public class BotHostedService : IHostedService
             return;
         }
 
-        // Build the selection prompt
         var lines = new List<string>
         {
             "🐾 **Boiler is starting up!**",
@@ -137,7 +139,6 @@ public class BotHostedService : IHostedService
 
         await dmChannel.SendMessageAsync(string.Join("\n", lines));
 
-        // Wait for the owner's reply in the DM channel
         string? chosen = await WaitForOwnerReplyAsync(dmChannel, ownerId, models, TimeSpan.FromSeconds(60));
 
         if (chosen is null)
@@ -159,23 +160,27 @@ public class BotHostedService : IHostedService
 
         _ollama.SetModel(chosen);
 
-        // Probe for tool call support
         await dmChannel.SendMessageAsync($"✅ Model set to **{chosen}**. `!ask` and `!eod` are ready to go!\n🔧 Testing tool call support...");
         var toolsSupported = await _ollama.ProbeToolSupportAsync();
         await dmChannel.SendMessageAsync(toolsSupported
             ? "🛠️ Tools enabled — `!ask` can manage tasks, habits, and reminders using natural language."
             : "⚠️ This model doesn't support tool calls — `!ask` will work conversationally only.\nTip: try `ollama pull qwen2.5:7b` or `llama3.1:8b` for tool use support.");
 
-        // Start EOD and rambling after model is confirmed active
-        _eodService.Start(_client);
+        // Wire up the companion memory layer
+        _ollama.SetMemoryService(_memoryService);
         _ollama.SetRamblingService(_ramblingService);
+        _ramblingService.SetMemoryService(_memoryService);
+        _eodService.SetMemoryService(_memoryService);
+        _eodService.SetPersonalityService(_personalityService);
+
+        // Start all services
+        _eodService.Start(_client);
+        _personalityService.Start(_client);
         _ramblingService.Start(_client);
+
+        await dmChannel.SendMessageAsync("🧠 Companion memory layer active — Boiler will now remember things across sessions.");
     }
 
-    /// <summary>
-    /// Listens on the DM channel for a valid numbered reply from the owner.
-    /// Returns the selected model name, "disabled" for 0, or null on timeout.
-    /// </summary>
     private async Task<string?> WaitForOwnerReplyAsync(
         IDMChannel dmChannel,
         ulong ownerId,
@@ -195,7 +200,6 @@ public class BotHostedService : IHostedService
                     tcs.TrySetResult("disabled");
                 else if (choice >= 1 && choice <= models.Count)
                     tcs.TrySetResult(models[choice - 1]);
-                // Out of range — ignore, keep waiting
             }
 
             return Task.CompletedTask;

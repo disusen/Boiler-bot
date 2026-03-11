@@ -12,7 +12,8 @@ namespace ProductivityBot.Services;
 /// <summary>
 /// Manages the end-of-day summary feature.
 /// Fires automatically at 9pm in the configured timezone, or on demand via !eod.
-/// Requires Ollama to be enabled — if disabled, EOD is fully inactive.
+/// After generating the summary, runs a reflection pass that writes EOD insights
+/// back into the memory layer so Boiler carries them forward.
 /// </summary>
 public class EodService
 {
@@ -21,10 +22,16 @@ public class EodService
     private readonly IConfiguration _config;
     private readonly ILogger<EodService> _logger;
 
+    // Injected lazily — PersonalityService depends on EodService indirectly
+    private MemoryService? _memoryService;
+    private PersonalityService? _personalityService;
+
+    public void SetMemoryService(MemoryService memoryService) => _memoryService = memoryService;
+    public void SetPersonalityService(PersonalityService personalityService) => _personalityService = personalityService;
+
     private DiscordSocketClient? _client;
     private Timer? _timer;
 
-    // Resolved once at Start() so we don't re-parse every tick
     private TimeZoneInfo _timezone = TimeZoneInfo.Utc;
     private ulong _ownerId;
     private bool _ownerIdValid;
@@ -45,7 +52,6 @@ public class EodService
     {
         _client = client;
 
-        // Resolve timezone from config, e.g. "Europe/Vilnius" or "Eastern Standard Time"
         var tzId = _config["Bot:Timezone"] ?? "UTC";
         try
         {
@@ -61,7 +67,6 @@ public class EodService
         if (!_ownerIdValid)
             _logger.LogWarning("Discord:OwnerId not configured — EOD auto-trigger will not fire.");
 
-        // Check every minute whether it's time to fire
         _timer = new Timer(TimerCallback, null, TimeSpan.Zero, TimeSpan.FromMinutes(1));
         _logger.LogInformation("EodService started. Timezone: {Tz}", _timezone.Id);
     }
@@ -81,7 +86,6 @@ public class EodService
             var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _timezone);
             var todayLocal = DateOnly.FromDateTime(nowLocal);
 
-            // Fire window: 21:00–21:01 (we check every minute, so one tick lands in this window)
             if (nowLocal.Hour != 21 || nowLocal.Minute != 0) return;
 
             await TryFireEodAsync(todayLocal, firedByCommand: false);
@@ -96,9 +100,6 @@ public class EodService
     //  Public entry point for !eod command
     // -------------------------------------------------------------------------
 
-    /// <summary>
-    /// Called by EodCommands. Returns a user-facing error string, or null on success.
-    /// </summary>
     public async Task<string?> TriggerManualEodAsync()
     {
         if (!_ollama.IsEnabled)
@@ -117,9 +118,8 @@ public class EodService
         if (alreadyFired)
             return $"⚠️ EOD has already been sent today ({todayLocal:MMM d}). It resets at midnight {_timezone.Id} time.";
 
-        // Fire asynchronously so the command can ack immediately
         _ = Task.Run(() => TryFireEodAsync(todayLocal, firedByCommand: true));
-        return null; // success — caller sends the ack
+        return null;
     }
 
     // -------------------------------------------------------------------------
@@ -128,14 +128,12 @@ public class EodService
 
     private async Task TryFireEodAsync(DateOnly date, bool firedByCommand)
     {
-        // Double-check inside a scope to guard against races (e.g. manual + timer at 21:00)
         using var scope = _services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<BotDbContext>();
 
         bool alreadyFired = await db.EodLogs.AnyAsync(e => e.Date == date);
         if (alreadyFired) return;
 
-        // Mark as fired immediately to prevent re-entry
         db.EodLogs.Add(new EodLog
         {
             Date = date,
@@ -148,8 +146,11 @@ public class EodService
 
         try
         {
-            var summaryText = await BuildAndGenerateSummaryAsync(db, date);
+            var (summaryText, eodSignal) = await BuildAndGenerateSummaryAsync(db, date);
             await SendSummaryDmAsync(summaryText, date);
+
+            // Reflection pass — write EOD insights into memory
+            await RunEodReflectionAsync(eodSignal, date);
         }
         catch (Exception ex)
         {
@@ -161,12 +162,11 @@ public class EodService
     //  Data collection + AI generation
     // -------------------------------------------------------------------------
 
-    private async Task<string> BuildAndGenerateSummaryAsync(BotDbContext db, DateOnly date)
+    private async Task<(string summaryText, EodSignal signal)> BuildAndGenerateSummaryAsync(BotDbContext db, DateOnly date)
     {
         var dayStart = date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified);
         var dayEnd   = date.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Unspecified);
 
-        // Convert the local day bounds to UTC for DB queries
         var dayStartUtc = TimeZoneInfo.ConvertTimeToUtc(dayStart, _timezone);
         var dayEndUtc   = TimeZoneInfo.ConvertTimeToUtc(dayEnd,   _timezone);
 
@@ -198,9 +198,22 @@ public class EodService
         var loggedToday  = allHabits.Where(h => h.Logs.Any(l => l.LoggedAt >= dayStartUtc && l.LoggedAt <= dayEndUtc)).ToList();
         var missedToday  = allHabits.Where(h => h.Logs.All(l => l.LoggedAt < dayStartUtc || l.LoggedAt > dayEndUtc)).ToList();
 
-        // --- Build structured data string for Ollama ---
-        var sb = new System.Text.StringBuilder();
+        // Build signal for reflection pass
+        var signal = new EodSignal
+        {
+            Date = date,
+            TasksCompleted = completedToday.Count,
+            TasksAdded = addedToday.Count,
+            TasksStillPending = stillPending.Count,
+            HabitsLogged = loggedToday.Count,
+            HabitsMissed = missedToday.Count,
+            TotalHabits = allHabits.Count,
+            MissedHabitNames = missedToday.Select(h => h.Name).ToList(),
+            CompletedTaskTitles = completedToday.Select(t => t.Title).ToList()
+        };
 
+        // --- Build data string ---
+        var sb = new System.Text.StringBuilder();
         sb.AppendLine($"DATE: {date:dddd, MMMM d yyyy}");
         sb.AppendLine();
 
@@ -223,7 +236,7 @@ public class EodService
         if (stillPending.Count == 0)
             sb.AppendLine("  (none — inbox zero!)");
         else
-            foreach (var t in stillPending.Take(10)) // cap at 10 to keep prompt sane
+            foreach (var t in stillPending.Take(10))
             {
                 var overdue = t.DueDate.HasValue && t.DueDate < DateTime.UtcNow ? " ⚠️ OVERDUE" : "";
                 sb.AppendLine($"  ⬜ [{t.Priority}] {t.Title}{overdue}");
@@ -251,7 +264,104 @@ public class EodService
         var dataString = sb.ToString();
         _logger.LogDebug("EOD data payload:\n{Data}", dataString);
 
-        return await _ollama.GenerateEodSummaryAsync(dataString);
+        var summaryText = await _ollama.GenerateEodSummaryAsync(dataString);
+        return (summaryText, signal);
+    }
+
+    // -------------------------------------------------------------------------
+    //  EOD reflection — writes insights into the memory layer
+    // -------------------------------------------------------------------------
+
+    private async Task RunEodReflectionAsync(EodSignal signal, DateOnly date)
+    {
+        if (_memoryService is null) return;
+
+        try
+        {
+            // Determine the day's overall quality for streak tracking
+            var habitCompletionRate = signal.TotalHabits > 0
+                ? (float)signal.HabitsLogged / signal.TotalHabits
+                : 1.0f;
+
+            var dayWasGood = signal.TasksCompleted >= 1 && habitCompletionRate >= 0.7f;
+            var dayWasRough = signal.TasksCompleted == 0 && signal.HabitsMissed > 0;
+
+            // Determine valence for the memory
+            var valence = dayWasGood ? EmotionalValence.Positive
+                        : dayWasRough ? EmotionalValence.Negative
+                        : EmotionalValence.Neutral;
+
+            // Importance scales with how notable the day was
+            var importance = dayWasGood || dayWasRough ? 0.7f : 0.4f;
+
+            // Build a terse memory of this EOD
+            var memoryParts = new List<string> { $"EOD {date:MMM d}:" };
+
+            if (signal.TasksCompleted > 0)
+                memoryParts.Add($"completed {signal.TasksCompleted} task(s)");
+
+            if (signal.HabitsLogged == signal.TotalHabits && signal.TotalHabits > 0)
+                memoryParts.Add("logged all habits");
+            else if (signal.HabitsMissed > 0)
+                memoryParts.Add($"missed {string.Join(", ", signal.MissedHabitNames)}");
+
+            if (signal.TasksStillPending > 3)
+                memoryParts.Add($"{signal.TasksStillPending} tasks still pending");
+
+            var memoryContent = string.Join("; ", memoryParts);
+            await _memoryService.AddMemoryAsync(_ownerId, memoryContent, valence, importance, tag: "eod");
+
+            // Update consecutive day streaks in BotState
+            await _memoryService.UpdateStateAsync(_ownerId, s =>
+            {
+                if (dayWasGood)
+                {
+                    s.ConsecutiveGoodDays++;
+                    s.ConsecutiveRoughDays = 0;
+                }
+                else if (dayWasRough)
+                {
+                    s.ConsecutiveRoughDays++;
+                    s.ConsecutiveGoodDays = 0;
+                }
+                else
+                {
+                    // Mixed day — reset both streaks
+                    s.ConsecutiveGoodDays = 0;
+                    s.ConsecutiveRoughDays = 0;
+                }
+
+                // Update mood signal based on trend
+                s.RecentObservation = dayWasGood
+                    ? $"Had a productive day on {date:MMM d} — completed {signal.TasksCompleted} task(s) and logged most habits."
+                    : dayWasRough
+                    ? $"Rough day on {date:MMM d} — no tasks completed and missed some habits ({string.Join(", ", signal.MissedHabitNames)})."
+                    : $"Mixed day on {date:MMM d}.";
+            });
+
+            // If there's a rough streak building, create a goal to gently follow up
+            var state = await _memoryService.GetOrCreateStateAsync(_ownerId);
+            if (state.ConsecutiveRoughDays >= 3)
+            {
+                await _memoryService.AddGoalAsync(
+                    _ownerId,
+                    $"Check in with Gvidas — {state.ConsecutiveRoughDays} rough days in a row. Be gentle, not pushy.",
+                    reason: "Consecutive rough EODs detected",
+                    priority: 8,
+                    surfaceAfter: DateTime.UtcNow);
+            }
+
+            // Trigger a personality reflection after EOD so BotState updates with fresh context
+            if (_personalityService is not null)
+                _ = Task.Run(() => _personalityService.RunReflectionAsync(_ownerId));
+
+            _logger.LogInformation("EOD reflection stored for {Date}. Valence: {Valence}, Good streak: {Good}, Rough streak: {Rough}",
+                date, valence, state.ConsecutiveGoodDays, state.ConsecutiveRoughDays);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "EodService: reflection pass failed for {Date}", date);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -281,7 +391,6 @@ public class EodService
 
         var dmChannel = await owner.CreateDMChannelAsync();
 
-        // Split if over Discord's 4096 embed description limit
         const int maxLen = 3800;
         var chunks = SplitText(summary, maxLen);
 
@@ -301,6 +410,10 @@ public class EodService
         }
     }
 
+    // -------------------------------------------------------------------------
+    //  Helpers
+    // -------------------------------------------------------------------------
+
     private static List<string> SplitText(string text, int maxLength)
     {
         var chunks = new List<string>();
@@ -318,5 +431,22 @@ public class EodService
             index += length;
         }
         return chunks;
+    }
+
+    // -------------------------------------------------------------------------
+    //  Internal signal type — passed from summary builder to reflection pass
+    // -------------------------------------------------------------------------
+
+    private class EodSignal
+    {
+        public DateOnly Date { get; set; }
+        public int TasksCompleted { get; set; }
+        public int TasksAdded { get; set; }
+        public int TasksStillPending { get; set; }
+        public int HabitsLogged { get; set; }
+        public int HabitsMissed { get; set; }
+        public int TotalHabits { get; set; }
+        public List<string> MissedHabitNames { get; set; } = new();
+        public List<string> CompletedTaskTitles { get; set; } = new();
     }
 }

@@ -1,3 +1,4 @@
+using Discord;
 using Discord.Commands;
 using ProductivityBot.Services;
 
@@ -9,8 +10,13 @@ namespace ProductivityBot.Commands;
 public class MemoryCommands : ModuleBase<SocketCommandContext>
 {
     private readonly OllamaService _ollama;
+    private readonly MemoryService _memory;
 
-    public MemoryCommands(OllamaService ollama) => _ollama = ollama;
+    public MemoryCommands(OllamaService ollama, MemoryService memory)
+    {
+        _ollama = ollama;
+        _memory = memory;
+    }
 
     [Command("clear")]
     [Alias("reset", "forget", "wipe")]
@@ -52,5 +58,66 @@ public class MemoryCommands : ModuleBase<SocketCommandContext>
             await ReplyAsync("🐾 No conversation history in this channel yet.");
         else
             await ReplyAsync($"🧠 Boiler remembers **{count}** messages in this channel.");
+    }
+
+    [Command("recall")]
+    [Alias("remember", "what")]
+    [Summary("See what Boiler remembers about you. Usage: !memory recall [query]")]
+    public async Task RecallAsync([Remainder] string? query = null)
+    {
+        await Context.Channel.TriggerTypingAsync();
+
+        var result = await _memory.RecallAsync(Context.User.Id, query);
+
+        // Split if needed for Discord's embed limit
+        const int maxLen = 3800;
+        if (result.Length <= maxLen)
+        {
+            var embed = new EmbedBuilder()
+                .WithColor(new Color(0x9B59B6))
+                .WithTitle(query is null ? "🧠 What Boiler Remembers" : $"🧠 Boiler's Memory: \"{query}\"")
+                .WithDescription(result)
+                .WithFooter("Use !memory clear to wipe conversation history")
+                .Build();
+
+            await ReplyAsync(embed: embed);
+        }
+        else
+        {
+            // Chunk it
+            var chunks = SplitText(result, maxLen);
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                var embed = new EmbedBuilder()
+                    .WithColor(new Color(0x9B59B6))
+                    .WithTitle(i == 0
+                        ? (query is null ? "🧠 What Boiler Remembers" : $"🧠 Boiler's Memory: \"{query}\"")
+                        : "🧠 (continued)")
+                    .WithDescription(chunks[i])
+                    .WithFooter(i == chunks.Count - 1 ? "Use !memory clear to wipe conversation history" : $"Part {i + 1}/{chunks.Count}")
+                    .Build();
+
+                await ReplyAsync(embed: embed);
+            }
+        }
+    }
+
+    private static List<string> SplitText(string text, int maxLength)
+    {
+        var chunks = new List<string>();
+        int index = 0;
+        while (index < text.Length)
+        {
+            int length = Math.Min(maxLength, text.Length - index);
+            if (index + length < text.Length)
+            {
+                int splitAt = text.LastIndexOf('\n', index + length, length);
+                if (splitAt == -1) splitAt = text.LastIndexOf(' ', index + length, length);
+                if (splitAt > index) length = splitAt - index;
+            }
+            chunks.Add(text.Substring(index, length).Trim());
+            index += length;
+        }
+        return chunks;
     }
 }

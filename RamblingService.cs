@@ -12,7 +12,8 @@ namespace ProductivityBot.Services;
 /// <summary>
 /// Makes Boiler ramble into a designated channel after a configurable idle period.
 /// Each tick of the threshold interval has a 33% chance to post.
-/// Rambles build on each other via a history queue — escalation is implicit.
+/// Rambles are now motivation-driven — they pull from BotState (mood + current thought)
+/// so Boiler has a genuine reason to speak, not just a random roll.
 /// Resets fully when !ask is used.
 /// </summary>
 public class RamblingService
@@ -25,13 +26,13 @@ public class RamblingService
 
     private DiscordSocketClient? _client;
     private Timer? _timer;
+    private MemoryService? _memoryService;
 
     private ulong _channelId;
     private ulong _ownerId;
     private TimeSpan _idleThreshold;
 
-    // Rolling history of this idle session's rambles — feeds back into the next prompt
-    // so thoughts build on each other and naturally get weirder over time
+    // Rolling history of this idle session's rambles
     private readonly Queue<(string role, string content)> _rambleHistory = new();
     private const int MaxRambleHistory = 10;
 
@@ -42,6 +43,8 @@ public class RamblingService
         _logger = logger;
         _services = services;
     }
+
+    public void SetMemoryService(MemoryService memoryService) => _memoryService = memoryService;
 
     public void Start(DiscordSocketClient client)
     {
@@ -63,16 +66,11 @@ public class RamblingService
         _idleThreshold = TimeSpan.FromMinutes(thresholdMinutes);
 
         _logger.LogInformation("RamblingService started. Idle threshold: {Threshold}min, channel: {Channel}", thresholdMinutes, _channelId);
-
-        // Timer fires on the same interval as the threshold — each tick is one roll opportunity
         _timer = new Timer(TimerCallback, null, _idleThreshold, _idleThreshold);
     }
 
     public void Stop() => _timer?.Dispose();
 
-    /// <summary>
-    /// Called by OllamaService whenever !ask is used — resets idle clock and clears ramble history.
-    /// </summary>
     public void OnInteraction()
     {
         _rambleHistory.Clear();
@@ -80,7 +78,7 @@ public class RamblingService
     }
 
     // -------------------------------------------------------------------------
-    //  Timer tick — fires every ThresholdMinutes, 33% roll each time
+    //  Timer tick
     // -------------------------------------------------------------------------
 
     private async void TimerCallback(object? _)
@@ -93,7 +91,6 @@ public class RamblingService
 
             _logger.LogInformation("RamblingService: tick — idle for {Idle:mm\\:ss}, threshold {Threshold:mm\\:ss}", idleFor, _idleThreshold);
 
-            // Only roll if actually idle — interaction may have reset the clock since last tick
             if (idleFor < _idleThreshold)
             {
                 _logger.LogInformation("RamblingService: not idle enough yet, skipping.");
@@ -129,14 +126,33 @@ public class RamblingService
 
         _logger.LogInformation("RamblingService: posting ramble (history depth: {Depth})", _rambleHistory.Count);
 
-        var context = await BuildOwnerContextAsync();
+        var ownerContext = await BuildOwnerContextAsync();
+
+        // Pull BotState for mood + current thought — this is what makes rambles feel motivated
+        string? currentMood = null;
+        string? currentThought = null;
+
+        if (_memoryService is not null)
+        {
+            try
+            {
+                var state = await _memoryService.GetOrCreateStateAsync(_ownerId);
+                currentMood = state.CurrentMood;
+                currentThought = state.CurrentThought;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "RamblingService: failed to read BotState");
+            }
+        }
+
         var messages = new List<(string role, string content)>(_rambleHistory);
 
         if (messages.Count == 0)
             messages.Add(("user", "What are you thinking about?"));
 
         await channel.TriggerTypingAsync();
-        var ramble = await _ollama.GenerateRambleAsync(messages, context);
+        var ramble = await _ollama.GenerateRambleAsync(messages, ownerContext, currentThought, currentMood);
 
         if (string.IsNullOrWhiteSpace(ramble)) return;
 
