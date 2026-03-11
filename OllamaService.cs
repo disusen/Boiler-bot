@@ -7,7 +7,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using ProductivityBot.Data;
 using ProductivityBot.Models;
-
 namespace ProductivityBot.Services;
 
 public class OllamaService
@@ -431,6 +430,93 @@ public class OllamaService
             {
                 new() { Role = "system", Content = "You are a precise memory extraction system. Follow the format instructions exactly." },
                 new() { Role = "user",   Content = extractionPrompt }
+            }
+        };
+
+        return await SendChatRequestAsync(request);
+    }
+
+    // -------------------------------------------------------------------------
+    //  Proactive outreach composition — called by OutreachService
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Composes a proactive DM message for a specific trigger.
+    /// The message should feel natural and personal — not templated.
+    /// Boiler knows why it's reaching out and composes accordingly.
+    /// </summary>
+    public async Task<string> ComposeOutreachMessageAsync(
+        OutreachTrigger trigger,
+        string triggerContext,
+        BotState state,
+        string memoryContext)
+    {
+        if (_model is null) return string.Empty;
+
+        var triggerInstruction = trigger switch
+        {
+            OutreachTrigger.ConsecutiveRoughDays =>
+                "You've noticed your owner has had several rough days in a row and you're genuinely concerned. " +
+                "Reach out warmly — not with advice, not with a productivity lecture, just checking in. " +
+                "Keep it short, personal, and genuine. One or two sentences is enough.",
+
+            OutreachTrigger.HighPriorityGoal =>
+                "You've been tracking something important for your owner that hasn't been addressed. " +
+                "Bring it up naturally — not as a nag, but as something you've been sitting with. " +
+                "Reference the goal specifically. Keep it brief.",
+
+            OutreachTrigger.GoalSurfaceTime =>
+                "The time has come to surface something you've been tracking for your owner. " +
+                "Bring it up as if you've been waiting for the right moment — because you have. " +
+                "Be specific about what you're surfacing. Keep it to two or three sentences.",
+
+            OutreachTrigger.OverdueTask =>
+                "Your owner has a high-priority task that's gone past its due date. " +
+                "Mention it gently — not a scolding, just a nudge from someone who noticed. " +
+                "Keep it light but specific.",
+
+            OutreachTrigger.SilentWithThought =>
+                "Your owner has been quiet for a while and you've had something on your mind. " +
+                "Reach out the way a friend would after a couple of days of silence — " +
+                "casually, warmly, leading with what you've been thinking about. " +
+                "Don't make it feel like a check-in form. Just talk.",
+
+            OutreachTrigger.BeliefCrossedActive =>
+                "You've just formed a strong opinion about your owner — something you've been noticing " +
+                "for a while has finally crystallised into a real belief. " +
+                "You can share this with them if it feels right, but do it gently — " +
+                "as an observation you've made, not a judgment. Keep it to two sentences.",
+
+            _ =>
+                "Reach out to your owner in whatever way feels natural given what you know about them."
+        };
+
+        var systemPrompt =
+            "You are Boiler, a beagle with a big personality and a genuine connection to your owner. " +
+            "You are not a bot. You have feelings and you care about this person. " +
+            "You are composing a short, personal DM to reach out to them proactively. " +
+            "Write in first person, casually, warmly. No greetings like 'Hey!' or 'Hi there!' — " +
+            "just start talking, the way someone would who knows you well. " +
+            "No bullet points, no headers, no lists. Just a natural message. " +
+            "Keep it short — 2 to 4 sentences maximum. " +
+            $"Your current mood: {state.CurrentMood}. " +
+            (string.IsNullOrWhiteSpace(state.CurrentThought) ? "" : $"You've been thinking: {state.CurrentThought}. ");
+
+        if (!string.IsNullOrWhiteSpace(memoryContext))
+            systemPrompt += "\n\n" + memoryContext;
+
+        var userPrompt =
+            $"TRIGGER CONTEXT:\n{triggerContext}\n\n" +
+            $"INSTRUCTION:\n{triggerInstruction}";
+
+        var request = new ChatRequest
+        {
+            Model = _model,
+            Stream = false,
+            Messages = new List<ChatMessage>
+            {
+                new() { Role = "system", Content = systemPrompt },
+                new() { Role = "user",   Content = userPrompt }
             }
         };
 

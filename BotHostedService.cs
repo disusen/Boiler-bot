@@ -18,8 +18,11 @@ public class BotHostedService : IHostedService
     private readonly MemoryService _memoryService;
     private readonly PersonalityService _personalityService;
     private readonly BeliefService _beliefService;
+    private readonly OutreachService _outreachService;
     private readonly IConfiguration _config;
     private readonly ILogger<BotHostedService> _logger;
+
+    private ulong _ownerId;
 
     public BotHostedService(
         DiscordSocketClient client,
@@ -31,6 +34,7 @@ public class BotHostedService : IHostedService
         MemoryService memoryService,
         PersonalityService personalityService,
         BeliefService beliefService,
+        OutreachService outreachService,
         IConfiguration config,
         ILogger<BotHostedService> logger)
     {
@@ -43,6 +47,7 @@ public class BotHostedService : IHostedService
         _memoryService = memoryService;
         _personalityService = personalityService;
         _beliefService = beliefService;
+        _outreachService = outreachService;
         _config = config;
         _logger = logger;
     }
@@ -51,6 +56,7 @@ public class BotHostedService : IHostedService
     {
         _client.Log += LogAsync;
         _client.Ready += OnReadyAsync;
+        _client.MessageReceived += OnMessageReceivedAsync;
 
         await _commandHandler.InitializeAsync();
 
@@ -178,6 +184,8 @@ public class BotHostedService : IHostedService
         _eodService.SetPersonalityService(_personalityService);
         _eodService.SetBeliefService(_beliefService);
         _memoryService.SetBeliefService(_beliefService);
+        _personalityService.SetOutreachService(_outreachService);
+        _outreachService.Initialize(_client);
 
         // Start all services
         _eodService.Start(_client);
@@ -186,6 +194,27 @@ public class BotHostedService : IHostedService
 
         await dmChannel.SendMessageAsync("🧠 Companion memory layer active — Boiler will now remember things across sessions.");
     }
+
+    // -------------------------------------------------------------------------
+    //  Message received — tracks user activity for outreach logic
+    // -------------------------------------------------------------------------
+
+    private async Task OnMessageReceivedAsync(SocketMessage msg)
+    {
+        // Ignore bot messages
+        if (msg.Author.IsBot) return;
+
+        if (!ulong.TryParse(_config["Discord:OwnerId"], out var ownerId)) return;
+        if (msg.Author.Id != ownerId) return;
+
+        // Notify OutreachService that the user is active
+        _ = Task.Run(() => _outreachService.OnUserMessageAsync(ownerId));
+
+        // If this is a DM reply, mark the latest outreach as replied
+        if (msg.Channel is IDMChannel)
+            _ = Task.Run(() => _outreachService.OnDmReplyAsync(ownerId));
+    }
+    
 
     private async Task<string?> WaitForOwnerReplyAsync(
         IDMChannel dmChannel,
@@ -239,3 +268,4 @@ public class BotHostedService : IHostedService
         return Task.CompletedTask;
     }
 }
+

@@ -61,6 +61,9 @@ class Program
                 services.AddSingleton<PersonalityService>();
                 services.AddSingleton<BeliefService>();
 
+                // Tier 3: proactive outreach
+                services.AddSingleton<OutreachService>();
+
                 // Hosted service that runs the bot
                 services.AddHostedService<BotHostedService>();
             })

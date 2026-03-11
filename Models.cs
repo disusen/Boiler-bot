@@ -373,3 +373,83 @@ public enum BeliefStatus
     Active = 1,     // confidence above active threshold — shapes Boiler's behavior
     Retired = 2     // confidence collapsed or belief contradicted out of existence
 }
+
+/// <summary>
+/// A specific thing Boiler wants to say or ask — crystallized during heartbeat reflection.
+/// Distinct from BotState.CurrentThought which is ambient mood-like description.
+///
+/// A BotThought is actionable: it has a priority, an expiry, and a resolved flag.
+/// Unresolved high-priority thoughts trigger DM outreach when the user has been silent.
+/// Thoughts that pass their expiry without being delivered are silently abandoned —
+/// the moment passed, Boiler moves on.
+/// </summary>
+public class BotThought
+{
+    public int Id { get; set; }
+    public ulong UserId { get; set; }
+
+    /// <summary>What Boiler wants to say or ask, in plain language.</summary>
+    public string Content { get; set; } = string.Empty;
+
+    /// <summary>Why this thought formed — the trigger that crystallized it.</summary>
+    public string? Trigger { get; set; }
+
+    /// <summary>
+    /// Priority 1–10.
+    /// Below 5 → low, will be absorbed into rambles if opportunity arises but won't trigger DM.
+    /// 5–7    → medium, will trigger DM if user silent for 48h.
+    /// 8–10   → high, will trigger DM at next heartbeat if conditions allow.
+    /// </summary>
+    public int Priority { get; set; } = 5;
+
+    public BotThoughtStatus Status { get; set; } = BotThoughtStatus.Pending;
+
+    public DateTime FormedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>After this time the thought is stale and should be abandoned without delivery.</summary>
+    public DateTime ExpiresAt { get; set; } = DateTime.UtcNow.AddDays(3);
+
+    public DateTime? DeliveredAt { get; set; }
+    public DateTime? AbandonedAt { get; set; }
+}
+
+public enum BotThoughtStatus
+{
+    Pending = 0,    // formed, not yet delivered
+    Delivered = 1,  // sent to user via DM or surfaced in conversation
+    Abandoned = 2   // expired without delivery — moment passed
+}
+
+/// <summary>
+/// Tracks every outreach DM Boiler has sent, with the trigger that caused it.
+/// Used for cooldown enforcement — prevents the same trigger type from firing
+/// more than once within its cooldown window, and enforces the daily DM cap.
+/// </summary>
+public class OutreachLog
+{
+    public int Id { get; set; }
+    public ulong UserId { get; set; }
+
+    /// <summary>What kind of trigger fired this outreach.</summary>
+    public OutreachTrigger Trigger { get; set; }
+
+    /// <summary>The message Boiler sent.</summary>
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>Whether the user replied to this DM.</summary>
+    public bool UserReplied { get; set; } = false;
+
+    public DateTime SentAt { get; set; } = DateTime.UtcNow;
+    public DateTime? UserRepliedAt { get; set; }
+}
+
+public enum OutreachTrigger
+{
+    ConsecutiveRoughDays = 0,   // 3+ rough EOD days in a row
+    HighPriorityGoal = 1,       // priority ≥8 goal unresolved for 48h+
+    GoalSurfaceTime = 2,        // goal.SurfaceAfter has passed
+    SilentWithThought = 3,      // user silent 48h+ and Boiler has unresolved high-priority thought
+    OverdueTask = 4,            // high priority task overdue 24h+
+    BeliefCrossedActive = 5,    // a belief just crossed the Active threshold for the first time
+    UserInitiated = 6           // triggered by !ask after a long silence (reply context)
+}

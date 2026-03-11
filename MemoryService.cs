@@ -546,24 +546,48 @@ public class MemoryService
 
     private static string BuildExtractionPrompt(string userMessage, string boilerReply)
         => $"""
-            You are a memory extraction system. Analyse the following conversation exchange and extract:
+            You are a memory extraction system for Boiler, an AI companion.
+            Analyse the following conversation exchange and extract only what is worth storing permanently.
 
-            1. FACTS: Stable facts about the user that Boiler should remember long-term.
+            1. FACTS: Stable, durable facts about the USER that would still be useful to know in 6 months.
                Format each as: FACT|<content>|<category>|<key>|<confidence>
                Categories: general, personal, work, health, patterns, preferences, goals
-               Key: a short snake_case identifier for this fact (e.g. "user_location", "user_job") — leave blank if not applicable
+               Key: short snake_case identifier (e.g. "user_location", "has_depression") — blank if not applicable
                Confidence: 0.5–1.0
 
-            2. MEMORIES: Noteworthy moments or emotional signals worth remembering.
+               A FACT must pass ALL of these tests:
+               ✓ It describes the USER (not Boiler, not the bot, not the conversation itself)
+               ✓ It is stable — still true weeks or months from now
+               ✓ It is specific — "has diagnosed depression" yes, "seems okay" no
+               ✓ It would change how a companion behaves toward this person
+
+               NEVER extract as a FACT:
+               ✗ Task completions or status updates ("completed task X", "marked task as done")
+               ✗ Descriptions of Boiler ("Boiler is helpful", "the bot is working")
+               ✗ Session commentary ("it's working fine", "good progress today")
+               ✗ Things the user said about the conversation itself
+               ✗ Anything that is only true right now, not durably
+
+            2. MEMORIES: Emotionally significant moments, revelations, or pattern signals worth remembering.
                Format each as: MEMORY|<content>|<valence>|<importance>|<tag>
                Valence: positive, negative, neutral
-               Importance: 0.1–1.0 (1.0 = very significant, 0.1 = minor)
-               Tag: conversation, task, habit, health, project, or leave blank
+               Importance: 0.1–1.0
+               Tag: conversation, health, project, finances, relationships, or blank
+
+               A MEMORY must be:
+               ✓ An emotional signal, a meaningful event, or a pattern worth tracking
+               ✓ Something that gives Boiler context for how the user is doing over time
+
+               NEVER extract as a MEMORY:
+               ✗ Bot actions ("Boiler sent a message", "Boiler encouraged the user")
+               ✗ Technical bot status ("bot is working", "heartbeat is implemented")
+               ✗ Task management events ("task was completed", "reminder was set")
+               ✗ Neutral filler with no emotional or contextual weight
 
             Rules:
-            - Only extract things genuinely worth remembering. Do NOT extract filler or pleasantries.
-            - If nothing is worth extracting, output: NOTHING
-            - One item per line. No extra commentary.
+            - If nothing passes the bar, output: NOTHING
+            - One item per line. No preamble, no commentary, no explanation.
+            - Fewer high-quality extractions beat many low-quality ones.
 
             USER: {userMessage}
             BOILER: {boilerReply}

@@ -21,6 +21,10 @@ public class BotDbContext : DbContext
     public DbSet<BotGoal> Goals => Set<BotGoal>();
     public DbSet<BotBelief> Beliefs => Set<BotBelief>();
 
+    // --- Tier 3: proactive outreach ---
+    public DbSet<BotThought> Thoughts => Set<BotThought>();
+    public DbSet<OutreachLog> OutreachLogs => Set<OutreachLog>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // ---- Existing ----
@@ -107,14 +111,28 @@ public class BotDbContext : DbContext
         modelBuilder.Entity<BotBelief>(e =>
         {
             e.HasKey(b => b.Id);
-            // Primary lookup: user's active beliefs
             e.HasIndex(b => new { b.UserId, b.Status });
-            // BeliefKey uniqueness per user — used for confirm/contradict lookups
             e.HasIndex(b => new { b.UserId, b.BeliefKey }).IsUnique();
             e.Property(b => b.Claim).HasMaxLength(500).IsRequired();
             e.Property(b => b.BeliefKey).HasMaxLength(100).IsRequired();
             e.Property(b => b.BehavioralImplication).HasMaxLength(500);
             e.Property(b => b.FormationEvidence).HasMaxLength(1000);
+        });
+
+        modelBuilder.Entity<BotThought>(e =>
+        {
+            e.HasKey(t => t.Id);
+            e.HasIndex(t => new { t.UserId, t.Status });
+            e.Property(t => t.Content).HasMaxLength(1000).IsRequired();
+            e.Property(t => t.Trigger).HasMaxLength(500);
+        });
+
+        modelBuilder.Entity<OutreachLog>(e =>
+        {
+            e.HasKey(o => o.Id);
+            e.HasIndex(o => new { o.UserId, o.SentAt });
+            e.HasIndex(o => new { o.UserId, o.Trigger });
+            e.Property(o => o.Message).HasMaxLength(2000).IsRequired();
         });
     }
 }

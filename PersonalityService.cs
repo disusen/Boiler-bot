@@ -23,10 +23,14 @@ public class PersonalityService
     private readonly IConfiguration _config;
     private readonly ILogger<PersonalityService> _logger;
 
+    private OutreachService? _outreach;
+
     private Timer? _heartbeatTimer;
     private Timer? _maintenanceTimer;
 
     private ulong _ownerId;
+
+    public void SetOutreachService(OutreachService outreach) => _outreach = outreach;
 
     // Heartbeat runs every 4 hours — updates mood/thought/goals without spamming
     private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromHours(4);
@@ -142,6 +146,26 @@ public class PersonalityService
                 EmotionalValence.Neutral,
                 importance: 0.4f,
                 tag: "observation");
+
+        // Crystallize a thought if the reflection produced one worth tracking
+        if (_outreach is not null && !string.IsNullOrWhiteSpace(parsed.thought))
+        {
+            // Priority is elevated if rough days are stacking or observation sounds urgent
+            var thoughtPriority = state.ConsecutiveRoughDays >= 2 ? 7 :
+                                  parsed.thought.Contains("concern", StringComparison.OrdinalIgnoreCase) ||
+                                  parsed.thought.Contains("worried", StringComparison.OrdinalIgnoreCase) ||
+                                  parsed.thought.Contains("miss", StringComparison.OrdinalIgnoreCase) ? 6 : 4;
+
+            await _outreach.CrystallizeThoughtAsync(
+                userId,
+                parsed.thought,
+                trigger: string.IsNullOrWhiteSpace(parsed.observation) ? null : parsed.observation,
+                priority: thoughtPriority);
+        }
+
+        // Evaluate outreach — fire-and-forget, never blocks reflection
+        if (_outreach is not null)
+            _ = Task.Run(() => _outreach.EvaluateAndReachOutAsync(userId));
 
         _logger.LogInformation("PersonalityService: reflection complete. Mood: {Mood} | Thought: {Thought}",
             parsed.mood, parsed.thought);
