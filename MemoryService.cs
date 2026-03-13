@@ -125,11 +125,11 @@ public class MemoryService
     /// This is intentionally async fire-and-forget from the caller's perspective
     /// so it doesn't slow down the !ask response.
     /// </summary>
-    public async Task ExtractAndStoreAsync(ulong userId, string userMessage, string boilerReply, OllamaService ollama)
+    public async Task ExtractAndStoreAsync(ulong userId, string userMessage, string boilerReply, OllamaService ollama, string? ownerName = null)
     {
         try
         {
-            var extractionPrompt = BuildExtractionPrompt(userMessage, boilerReply);
+            var extractionPrompt = BuildExtractionPrompt(userMessage, boilerReply, ownerName);
             var raw = await ollama.ExtractMemoryAsync(extractionPrompt);
 
             if (string.IsNullOrWhiteSpace(raw)) return;
@@ -544,28 +544,43 @@ public class MemoryService
         return sb.ToString().Trim();
     }
 
-    private static string BuildExtractionPrompt(string userMessage, string boilerReply)
-        => $"""
-            You are a memory extraction system for Boiler, an AI companion.
-            Analyse the following conversation exchange and extract only what is worth storing permanently.
+    private static string BuildExtractionPrompt(string userMessage, string boilerReply, string? ownerName = null)
+    {
+        var userLabel = string.IsNullOrWhiteSpace(ownerName) ? "the user" : ownerName;
 
-            1. FACTS: Stable, durable facts about the USER that would still be useful to know in 6 months.
+        return $"""
+            You are a memory extraction system for Boiler, a Discord bot companion.
+
+            CRITICAL CONTEXT — read this before anything else:
+            - The USER in this conversation is a human named {userLabel}.
+            - "Boiler" or "Boiler-bot" refers to the AI bot/software — NOT the human user.
+            - There is also a real dog named Boiler (a beagle) who belongs to {userLabel}. The dog is not the bot.
+            - Your job is to extract facts and memories ONLY about {userLabel} the human.
+
+            SUBJECT RULE (mandatory): Every FACT and MEMORY you output must have {userLabel} as its subject.
+            If the subject is the bot, the software, a task, a habit, or anything other than {userLabel} the human — discard it.
+            If you are unsure who the subject is, output NOTHING for that item.
+
+            1. FACTS: Stable, durable facts about {userLabel} that would still be useful to know in 6 months.
                Format each as: FACT|<content>|<category>|<key>|<confidence>
                Categories: general, personal, work, health, patterns, preferences, goals
                Key: short snake_case identifier (e.g. "user_location", "has_depression") — blank if not applicable
                Confidence: 0.5–1.0
 
                A FACT must pass ALL of these tests:
-               ✓ It describes the USER (not Boiler, not the bot, not the conversation itself)
+               ✓ Subject is {userLabel} the human (not the bot, not the dog, not software)
                ✓ It is stable — still true weeks or months from now
                ✓ It is specific — "has diagnosed depression" yes, "seems okay" no
+               ✓ It is stated as established truth, not a one-off intention ("I'll try to walk more" is NOT a fact)
                ✓ It would change how a companion behaves toward this person
 
                NEVER extract as a FACT:
-               ✗ Task completions or status updates ("completed task X", "marked task as done")
-               ✗ Descriptions of Boiler ("Boiler is helpful", "the bot is working")
-               ✗ Session commentary ("it's working fine", "good progress today")
-               ✗ Things the user said about the conversation itself
+               ✗ Anything about Boiler the bot ("Boiler is helpful", "Boiler has heartbeat", "the bot is working")
+               ✗ Anything about the dog Boiler ("Boiler is a beagle") — already known, don't re-extract
+               ✗ Task or habit completions ("completed task X", "marked habit as done")
+               ✗ Session commentary ("it's working fine", "good progress today", "glad it's working")
+               ✗ Things said about the conversation or the bot itself
+               ✗ Vague intentions stated in passing ("I will try to...", "I want to...") unless clearly a firm commitment
                ✗ Anything that is only true right now, not durably
 
             2. MEMORIES: Emotionally significant moments, revelations, or pattern signals worth remembering.
@@ -575,23 +590,26 @@ public class MemoryService
                Tag: conversation, health, project, finances, relationships, or blank
 
                A MEMORY must be:
+               ✓ Subject is {userLabel} the human — their emotional state, experiences, or meaningful events
                ✓ An emotional signal, a meaningful event, or a pattern worth tracking
-               ✓ Something that gives Boiler context for how the user is doing over time
+               ✓ Something that gives Boiler context for how {userLabel} is doing over time
 
                NEVER extract as a MEMORY:
-               ✗ Bot actions ("Boiler sent a message", "Boiler encouraged the user")
-               ✗ Technical bot status ("bot is working", "heartbeat is implemented")
-               ✗ Task management events ("task was completed", "reminder was set")
+               ✗ Bot actions or reactions ("Boiler encouraged the user", "Boiler expressed excitement")
+               ✗ Technical bot status ("bot is working", "heartbeat is implemented", "Boiler is functional")
+               ✗ Task or habit management events ("task was completed", "reminder was set")
                ✗ Neutral filler with no emotional or contextual weight
 
             Rules:
             - If nothing passes the bar, output: NOTHING
             - One item per line. No preamble, no commentary, no explanation.
             - Fewer high-quality extractions beat many low-quality ones.
+            - When in doubt, output NOTHING. A missed memory is better than a wrong one.
 
             USER: {userMessage}
             BOILER: {boilerReply}
             """;
+    }
 
     private static (List<(string content, FactCategory category, string? key, float confidence)> facts,
                     List<(string content, EmotionalValence valence, float importance, string? tag)> memories)

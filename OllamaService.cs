@@ -15,6 +15,7 @@ public class OllamaService
     private readonly ILogger<OllamaService> _logger;
     private readonly int _contextMessages;
     private readonly IServiceProvider _services;
+    private readonly string? _ownerName;
 
     private string? _model;
 
@@ -49,6 +50,7 @@ public class OllamaService
 
         var baseUrl = config["Ollama:BaseUrl"] ?? "http://localhost:11434";
         _contextMessages = int.TryParse(config["Ollama:ContextMessages"], out var cm) && cm > 0 ? cm : 20;
+        _ownerName = config["Bot:OwnerName"];
 
         _http = new HttpClient
         {
@@ -273,7 +275,7 @@ public class OllamaService
             {
                 try
                 {
-                    await _memoryService.ExtractAndStoreAsync(capturedUserId, capturedPrompt, capturedReply, this);
+                    await _memoryService.ExtractAndStoreAsync(capturedUserId, capturedPrompt, capturedReply, this, _ownerName);
                 }
                 catch (Exception ex)
                 {
