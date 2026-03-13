@@ -136,7 +136,7 @@ public class PersonalityService
 
         // Store any new goals the reflection produced
         foreach (var (description, reason, priority) in parsed.newGoals)
-            await _memory.AddGoalAsync(userId, description, reason, priority);
+            await _memory.AddGoalIfNewAsync(userId, description, _ollama, reason, priority);
 
         // Store the reflection itself as a memory so it feeds future reflections
         if (!string.IsNullOrWhiteSpace(parsed.observation))

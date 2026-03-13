@@ -225,6 +225,117 @@ public class MemoryService
         }
     }
 
+    /// <summary>
+    /// Autonomous goal insertion with deduplication — used by PersonalityService and EodService.
+    /// Checks existing active goals before inserting:
+    ///   1. Fast path: string similarity check — if an existing goal is clearly the same topic, skip.
+    ///   2. LLM path: if unclear, asks the model to judge whether this is genuinely new.
+    /// User-created goals (!goal add) bypass this entirely via AddGoalAsync.
+    /// </summary>
+    public async Task AddGoalIfNewAsync(ulong userId, string description, OllamaService ollama,
+        string? reason = null, int priority = 5, DateTime? surfaceAfter = null)
+    {
+        try
+        {
+            using var scope = _services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<BotDbContext>();
+
+            var existing = await db.Goals
+                .Where(g => g.UserId == userId && g.Status == BotGoalStatus.Active && !g.UserCreated)
+                .OrderByDescending(g => g.Priority)
+                .ToListAsync();
+
+            if (existing.Any())
+            {
+                // Fast path — normalised string overlap check
+                var normNew = NormaliseGoalText(description);
+                foreach (var g in existing)
+                {
+                    var normExisting = NormaliseGoalText(g.Description);
+                    if (WordOverlapScore(normNew, normExisting) >= 0.6f)
+                    {
+                        _logger.LogDebug(
+                            "MemoryService: goal skipped (fast-path duplicate of #{Id}): {Desc}",
+                            g.Id, description);
+                        return;
+                    }
+                }
+
+                // LLM path — only reached if fast path didn't catch it
+                if (ollama.IsEnabled)
+                {
+                    var existingList = string.Join("\n", existing.Select(g => $"- [{g.Id}] {g.Description}"));
+                    var prompt = $"""
+                        You are evaluating whether a new goal is a duplicate of an existing one.
+
+                        EXISTING ACTIVE GOALS:
+                        {existingList}
+
+                        PROPOSED NEW GOAL: {description}
+
+                        Is the proposed goal substantively the same as any existing goal — same topic, same intent, even if worded differently?
+
+                        Reply with exactly one word:
+                        DUPLICATE — if it is covered by an existing goal
+                        NEW — if it is genuinely different and worth tracking separately
+                        """;
+
+                    var result = await ollama.ExtractMemoryAsync(prompt);
+                    var verdict = result?.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                                         .FirstOrDefault()?.Trim().ToUpper();
+
+                    if (verdict == "DUPLICATE")
+                    {
+                        _logger.LogDebug(
+                            "MemoryService: goal skipped (LLM duplicate): {Desc}", description);
+                        return;
+                    }
+                }
+            }
+
+            // Passed dedup — insert
+            db.Goals.Add(new BotGoal
+            {
+                UserId = userId,
+                Description = description,
+                Reason = reason,
+                Priority = priority,
+                SurfaceAfter = surfaceAfter
+            });
+
+            await db.SaveChangesAsync();
+            _logger.LogInformation("MemoryService: new autonomous goal added: {Desc}", description);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "MemoryService.AddGoalIfNewAsync failed");
+        }
+    }
+
+    // Strips filler words and lowercases for overlap comparison
+    private static readonly HashSet<string> _stopWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "the", "a", "an", "to", "and", "or", "of", "in", "on", "at", "for",
+        "with", "is", "are", "be", "s", "by", "their", "this", "that", "it",
+        "user", "boiler", "about", "discuss", "encourage", "help", "gvidas"
+    };
+
+    private static string[] NormaliseGoalText(string text)
+        => text.ToLower()
+               .Split(new[] { ' ', '-', '_', '\'', '.', ',', '!', '?' },
+                      StringSplitOptions.RemoveEmptyEntries)
+               .Where(w => !_stopWords.Contains(w))
+               .ToArray();
+
+    private static float WordOverlapScore(string[] a, string[] b)
+    {
+        if (a.Length == 0 || b.Length == 0) return 0f;
+        var setA = new HashSet<string>(a, StringComparer.OrdinalIgnoreCase);
+        var setB = new HashSet<string>(b, StringComparer.OrdinalIgnoreCase);
+        var intersection = setA.Count(w => setB.Contains(w));
+        return (float)intersection / Math.Min(setA.Count, setB.Count);
+    }
+
     public async Task ResolveGoalAsync(ulong userId, int goalId, string? notes = null)
     {
         try

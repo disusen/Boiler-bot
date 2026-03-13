@@ -345,9 +345,10 @@ public class EodService
             var state = await _memoryService.GetOrCreateStateAsync(_ownerId);
             if (state.ConsecutiveRoughDays >= 3)
             {
-                await _memoryService.AddGoalAsync(
+                await _memoryService.AddGoalIfNewAsync(
                     _ownerId,
                     $"Check in with Gvidas — {state.ConsecutiveRoughDays} rough days in a row. Be gentle, not pushy.",
+                    _ollama,
                     reason: "Consecutive rough EODs detected",
                     priority: 8,
                     surfaceAfter: DateTime.UtcNow);
